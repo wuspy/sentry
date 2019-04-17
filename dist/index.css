@@ -1,0 +1,35 @@
+ body {
+    background-color: green;
+    overflow: hidden;
+    margin: 0;
+ }
+ 
+ #player {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+ }
+
+ #joystick-zone {
+    position: fixed;
+    left: 50%;
+    width: 50%;
+    height: 100%;
+ }
+ 
+#button-container {
+    position: fixed;
+    height: 100%;
+}
+
+ #fire-button {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    margin-left: 32px;
+    width: 50px;
+    height: 50px;
+    box-shadow: 0 0 0 5px #ffffff60;
+    border-radius: 50%;
+    background-color: #ff4848;
+ }
