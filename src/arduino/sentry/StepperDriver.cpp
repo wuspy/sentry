@@ -1,6 +1,6 @@
 #include "StepperDriver.h"
 
-using namespace Sentry::Arduino;
+using namespace Sentry;
 
 StepperDriver::StepperDriver(uint8_t stepPin, uint8_t dirPin, uint8_t enablePin, bool invertDir)
 {

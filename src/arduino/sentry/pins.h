@@ -1,5 +1,7 @@
-#ifndef SENTRY_ARDUINO_PINS_H
-#define SENTRY_ARDUINO_PINS_H
+#ifndef SENTRY_PINS_H
+#define SENTRY_PINS_H
+
+namespace Sentry {
 
 const uint8_t PITCH_STEP_PIN        = 54;
 const uint8_t PITCH_DIR_PIN         = 55;
@@ -18,4 +20,6 @@ const uint8_t YAW_ENDSTOP_PIN       = 14;
 
 const uint8_t LED_PIN               = 13;
 
-#endif // SENTRY_ARDUINO_PINS_H
+} // namespace Sentry
+
+#endif // SENTRY_PINS_H

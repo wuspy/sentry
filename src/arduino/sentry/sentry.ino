@@ -1,12 +1,11 @@
 #include <Arduino.h>
-#include "src/common/serialize.h"
-#include "src/common/motion.h"
-#include "src/arduino/pins.h"
-#include "src/common/Command.h"
-#include "src/arduino/StepperDriver.h"
+#include "serialize.h"
+#include "motion.h"
+#include "pins.h"
+#include "Command.h"
+#include "StepperDriver.h"
 
-using namespace Sentry::Arduino;
-using namespace Sentry::Common;
+using namespace Sentry;
 
 StepperDriver pitch(PITCH_STEP_PIN, PITCH_DIR_PIN, PITCH_ENABLE_PIN);
 StepperDriver yaw(YAW_STEP_PIN, YAW_DIR_PIN, YAW_ENABLE_PIN);

@@ -1,8 +1,7 @@
-#ifndef SENTRY_COMMON_COMMAND_H
-#define SENTRY_COMMON_COMMAND_H
+#ifndef SENTRY_COMMAND_H
+#define SENTRY_COMMAND_H
 
 namespace Sentry {
-namespace Common {
 
 typedef enum : uint8_t {
     COMMAND_NONE = 0,
@@ -14,7 +13,6 @@ typedef enum : uint8_t {
     COMMAND_FIRE_AND_CYCLE_BREACH,
 } Command;
 
-} // namespace Common
 } // namespace Sentry
 
-#endif // SENTRY_COMMON_COMMAND_H
+#endif // SENTRY_COMMAND_H

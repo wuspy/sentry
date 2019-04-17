@@ -1,11 +1,10 @@
-#ifndef SENTRY_ARDUINO_STEPPERDRIVER_H
-#define SENTRY_ARDUINO_STEPPERDRIVER_H
+#ifndef SENTRY_STEPPERDRIVER_H
+#define SENTRY_STEPPERDRIVER_H
 
 #include <stdlib.h>
 #include <Arduino.h>
 
 namespace Sentry {
-namespace Arduino {
 
 class StepperDriver
 {
@@ -107,7 +106,6 @@ protected:
     bool _invertDir;
 };
 
-} // namespace Arduino
 } // namespace Sentry
 
-#endif // SENTRY_ARDUINO_STEPPERDRIVER_H
+#endif // SENTRY_STEPPERDRIVER_H

@@ -1,10 +1,9 @@
-#ifndef SENTRY_ARDUINO_SERIALIZE_H
-#define SENTRY_ARDUINO_SERIALIZE_H
+#ifndef SENTRY_SERIALIZE_H
+#define SENTRY_SERIALIZE_H
 
 #include <stdint.h>
 
 namespace Sentry {
-namespace Common {
 
 const uint16_t CRC16_USB_TABLE[256] = {
     0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0,
@@ -84,7 +83,6 @@ inline uint16_t crc16(const char *arr, uint32_t length)
     return crc ^ 0xFFFF;
 }
 
-} // namespace Common
 } // namespace Sentry
 
-#endif // SENTRY_ARDUINO_SERIALIZE_H
+#endif // SENTRY_SERIALIZE_H

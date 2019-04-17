@@ -1,10 +1,9 @@
-#ifndef SENTRY_COMMON_MOTION_H
-#define SENTRY_COMMON_MOTION_H
+#ifndef SENTRY_MOTION_H
+#define SENTRY_MOTION_H
 
 #include <math.h>
 
 namespace Sentry {
-namespace Common {
 
 const int32_t PITCH_STEPS_PER_REV   = 4 * 200;
 const int32_t YAW_STEPS_PER_REV     = 4 * 200;
@@ -34,7 +33,6 @@ const int32_t YAW_HOME_OFFSET       = YAW_MAX_STEPS / 4;
 const bool YAW_HOME_INVERTED        = false;
 const bool YAW_INVERTED             = false;
 
-} // namespace Common
 } // namespace Sentry
 
-#endif // SENTRY_COMMON_MOTION_H
+#endif // SENTRY_MOTION_H
