@@ -1,5 +1,3 @@
-extern crate serde_json as json;
-
 use tokio::reactor::Handle;
 use websocket::server::r#async::Server;
 use websocket::client::r#async::{TcpStream, ClientNew};
@@ -49,7 +47,7 @@ impl ClientQueue {
 
     pub fn send(&mut self, client: SocketAddr, message: String) {
         if let Some(client) = self.clients.iter().find(|c| c.address == client) {
-            client.tx.unbounded_send(message);
+            client.tx.unbounded_send(message).unwrap();
         } else {
             error!("Attempted to send message to invalid client address {}", client);
         }
@@ -58,17 +56,20 @@ impl ClientQueue {
     pub fn send_client_states(&mut self) {
         let len = self.clients.len();
         for i in 0..len {
-            self.clients[i].tx.unbounded_send(json!({
-                "queue_position": i,
-                "num_clients": len,
-            }).to_string());
+            self.clients[i].tx
+                .unbounded_send(json!({
+                    "queue_position": i,
+                    "num_clients": len,
+                })
+                .to_string())
+                .unwrap();
         }
     }
 }
 
-pub fn start(addr: &str, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
-    let (client_sink, client_stream) = unbounded::<Message>();
-    let (server_sink, server_stream) = unbounded::<Message>();
+pub fn start(addr: &SocketAddr, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+    let (in_message_sink, in_message_stream) = unbounded::<Message>();
+    let (out_message_sink, out_message_stream) = unbounded::<Message>();
     let clients = Arc::new(RwLock::new(ClientQueue::new()));
     let clients2 = clients.clone();
 
@@ -83,12 +84,12 @@ pub fn start(addr: &str, handle: &Handle) -> (UnboundedSender<Message>, Unbounde
         })
         .for_each( move |(upgrade, addr)| {
             info!("Client {} has connected", addr);
-            handle_client(upgrade.accept(), addr, client_sink.clone(), clients.clone());
+            handle_client(upgrade.accept(), addr, out_message_sink.clone(), clients.clone());
             Ok(())
         })
     );
 
-    tokio::spawn(server_stream
+    tokio::spawn(in_message_stream
         .map_err(|_| ())
         .for_each(move |message| {
             let clients = clients2.clone();
@@ -97,13 +98,13 @@ pub fn start(addr: &str, handle: &Handle) -> (UnboundedSender<Message>, Unbounde
         })
     );
 
-    (server_sink, client_stream)
+    (in_message_sink, out_message_stream)
 }
 
 fn handle_client(
     client: ClientNew<TcpStream>,
     addr: SocketAddr,
-    app_sink: UnboundedSender<Message>,
+    out_message_sink: UnboundedSender<Message>,
     clients: Arc<RwLock<ClientQueue>>
 ) {
     tokio::spawn(client
@@ -123,7 +124,7 @@ fn handle_client(
                 .and_then(|_| Ok(()))
             );
 
-            app_sink
+            out_message_sink
                 .sink_map_err(|_| ())
                 // Send a message notifying the server that a client has connected
                 .send(Message {

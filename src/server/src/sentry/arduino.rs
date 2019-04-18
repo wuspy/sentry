@@ -1,7 +1,3 @@
-extern crate tokio_serial;
-extern crate bytes;
-extern crate byteorder;
-
 use std::time::Duration;
 use std::mem;
 use std::io;
@@ -89,8 +85,8 @@ impl Encoder for ArduinoCodec {
 pub fn start(port: &str, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
     let arduino = Serial::from_path_with_handle(port, &SETTINGS, handle).unwrap();
     let (arduino_sink, arduino_stream) = ArduinoCodec.framed(arduino).split();
-    let (server_sink, server_stream) = unbounded::<Message>();
-    let (arduino_sink_proxy, arduino_stream_proxy) = unbounded::<Message>();
+    let (in_message_sink, in_message_stream) = unbounded::<Message>();
+    let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
     // Spawn a task to forward arduino messages to the server through an unbounded channel
     tokio::spawn(arduino_stream
@@ -101,12 +97,12 @@ pub fn start(port: &str, handle: &Handle) -> (UnboundedSender<Message>, Unbounde
                 source: MessageSource::Arduino,
             }
         })
-        .forward(arduino_sink_proxy.sink_map_err(|_| ()))
+        .forward(out_message_sink.sink_map_err(|_| ()))
         .and_then(|_| Ok(()))
     );
 
     // Spawn a task to forward server messages to the arduino
-    tokio::spawn(server_stream
+    tokio::spawn(in_message_stream
         .map_err(|_| ())
         .filter_map(move |message| {
             match &message.source {
@@ -127,5 +123,5 @@ pub fn start(port: &str, handle: &Handle) -> (UnboundedSender<Message>, Unbounde
         .and_then(|_| Ok(()))
     );
 
-    (server_sink, arduino_stream_proxy)
+    (in_message_sink, out_message_stream)
 }

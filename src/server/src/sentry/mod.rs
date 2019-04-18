@@ -1,3 +1,16 @@
+extern crate serde_json;
+extern crate glib;
+extern crate gstreamer as gst;
+extern crate gstreamer_sdp as gst_sdp;
+extern crate gstreamer_webrtc as gst_webrtc;
+extern crate tokio;
+extern crate tokio_serial;
+extern crate tokio_fs;
+extern crate tokio_io;
+extern crate bytes;
+extern crate byteorder;
+extern crate hyper;
+
 use std::net::SocketAddr;
 
 pub enum Command {
@@ -54,6 +67,7 @@ pub struct Message {
     pub source: MessageSource,
 }
 
+pub mod http_server;
 pub mod websocket_server;
 pub mod arduino;
 pub mod video;
