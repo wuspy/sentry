@@ -1,5 +1,8 @@
  body {
-    background-color: green;
+    font-family: Helvetica,Arial,sans-serif;
+    font-size: 14px;
+    line-height: 1.2;
+    background-color: black;
     overflow: hidden;
     margin: 0;
  }
@@ -32,4 +35,15 @@
     box-shadow: 0 0 0 5px #ffffff60;
     border-radius: 50%;
     background-color: #ff4848;
+ }
+
+ #message {
+    position: fixed;
+    width: 100%;
+    padding: 10px;
+    box-shadow: 0 0 20px 5px #00000080;
+    background-color: #00000080;
+    color: white;
+    text-align: center;
+    display: none;
  }
