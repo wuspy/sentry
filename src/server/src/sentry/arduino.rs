@@ -82,7 +82,7 @@ impl Encoder for ArduinoCodec {
     }
 }
 
-pub fn start(port: &str, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+pub fn start(port: String, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
     let arduino = Serial::from_path_with_handle(port, &SETTINGS, handle).unwrap();
     let (arduino_sink, arduino_stream) = ArduinoCodec.framed(arduino).split();
     let (in_message_sink, in_message_stream) = unbounded::<Message>();

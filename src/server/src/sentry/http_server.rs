@@ -12,8 +12,8 @@ use std::path::PathBuf;
 type ResponseFuture = Box<Future<Item=Response<Body>, Error=io::Error> + Send>;
 
 /// Serves the directory at serve_root on addr
-pub fn start(addr: &SocketAddr, serve_root: PathBuf) {
-    info!("Starting HTTP server on {} serving {}", addr, serve_root.to_str().unwrap());
+pub fn start(addr: &SocketAddr, serve_root: String) {
+    info!("Starting HTTP server on {} serving {}", addr, serve_root);
     tokio::spawn(Server::bind(addr)
         .serve(move || {
             let serve_root = serve_root.clone();
@@ -23,11 +23,11 @@ pub fn start(addr: &SocketAddr, serve_root: PathBuf) {
     );
 }
 
-fn serve(req: Request<Body>, serve_root: PathBuf) -> ResponseFuture {
+fn serve(req: Request<Body>, serve_root: String) -> ResponseFuture {
     info!("HTTP {} {}", req.method(), req.uri().path());
     match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") => serve_file(&serve_root, "index.html"),
-        (&Method::GET, path) => serve_file(&serve_root, path),
+        (&Method::GET, "/") => serve_file(serve_root, "index.html"),
+        (&Method::GET, path) => serve_file(serve_root, path),
         _ => {
             Box::new(future::ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -38,8 +38,8 @@ fn serve(req: Request<Body>, serve_root: PathBuf) -> ResponseFuture {
     }
 }
 
-fn serve_file(root: &PathBuf, file: &str) -> ResponseFuture {
-    let filename = format!("{}/{}", root.to_str().unwrap(), file);
+fn serve_file(root: String, file: &str) -> ResponseFuture {
+    let filename = format!("{}/{}", root, file);
     Box::new(tokio_fs::file::File::open(filename)
         .and_then(|file| {
             let buf: Vec<u8> = Vec::new();
