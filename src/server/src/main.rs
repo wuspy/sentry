@@ -19,35 +19,7 @@ use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
 mod sentry;
-
-#[derive(Deserialize)]
-struct ArduinoConfig {
-    device: String,
-}
-
-#[derive(Deserialize)]
-struct VideoConfig {
-    device: String,
-}
-
-#[derive(Deserialize)]
-struct WsServerConfig {
-    port: u16,
-}
-
-#[derive(Deserialize)]
-struct HttpServerConfig {
-    port: u16,
-    directory: String,
-}
-
-#[derive(Deserialize)]
-struct Config {
-    websocket: WsServerConfig,
-    http_server: HttpServerConfig,
-    video: VideoConfig,
-    arduino: ArduinoConfig,
-}
+use sentry::config::Config;
 
 fn main() {
     TermLogger::init(LevelFilter::Info, LogConfig::default()).unwrap();
@@ -56,44 +28,22 @@ fn main() {
         return;
     }
 
-    match read_config() {
+    match sentry::config::load() {
         Ok(config) => run(config),
         Err(err) => error!("{}", err)
     }
 }
 
-fn read_config() -> Result<Config, String> {
-    let mut path = std::env::current_exe().map_err(|err| err.to_string())?;
-    path.pop();
-    path.push("config.toml");
-    let path = path.to_str().unwrap();
-    info!("Reading configuration at \"{}\"...", path);
-
-    Ok(toml::from_str::<Config>(
-        fs::read_to_string(path)
-            .map_err(|err|
-                format!("Could not read configuration file \"{}\": {}", path, err.to_string())
-            )?
-            .as_str()
-        )
-        .map_err(|err|
-            format!("Could not parse configuration file \"{}\": {}", path, err.to_string())
-        )?
-    )
-}
-
 fn run(config: Config) {
-    tokio::run(lazy(|| {
+    tokio::run(lazy(move || {
         let mut runtime = tokio::runtime::Runtime::new().unwrap();
         let reactor = runtime.reactor();
 
-        let ip = IpAddr::from_str("127.0.0.1").unwrap();
+        let (server_tx, server_rx) = sentry::websocket_server::start(config.clone(), reactor);
+        let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor);
+        //let (video_tx, video_rx) = sentry::video::start(&config);
 
-        let (server_tx, server_rx) = sentry::websocket_server::start(&SocketAddr::new(ip, config.websocket.port), reactor);
-        let (arduino_tx, arduino_rx) = sentry::arduino::start(config.arduino.device, reactor);
-        //let (video_tx, video_rx) = sentry::video::start(config.video.device);
-
-        sentry::http_server::start(&SocketAddr::new(ip, config.http_server.port), config.http_server.directory);
+        sentry::http_server::start(config.clone());
 
         tokio::spawn(arduino_rx
             .map_err(|_| ())

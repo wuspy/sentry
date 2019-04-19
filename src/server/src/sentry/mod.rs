@@ -13,6 +13,7 @@ extern crate hyper;
 
 use std::net::SocketAddr;
 
+#[derive(Clone)]
 pub enum Command {
     Move {
         pitch: f64,
@@ -26,6 +27,7 @@ pub enum Command {
     Home,
 }
 
+#[derive(Clone)]
 pub enum HardwareStatus {
     Ready,
     Homing,
@@ -33,17 +35,20 @@ pub enum HardwareStatus {
     Error,
 }
 
+#[derive(Clone)]
 pub struct Client {
     pub address: SocketAddr,
     pub queue_position: usize,
 }
 
+#[derive(Clone)]
 pub enum MessageSource {
     Arduino,
     Server,
     Client (Client),
 }
 
+#[derive(Clone)]
 pub enum MessageContent {
     HardwareState {
         pitch_pos: u32,
@@ -62,6 +67,7 @@ pub enum MessageContent {
     ClientDisconnected (Client),
 }
 
+#[derive(Clone)]
 pub struct Message {
     pub content: MessageContent,
     pub source: MessageSource,
@@ -71,3 +77,4 @@ pub mod http_server;
 pub mod websocket_server;
 pub mod arduino;
 pub mod video;
+pub mod config;

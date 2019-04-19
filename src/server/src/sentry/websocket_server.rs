@@ -2,12 +2,14 @@ use tokio::reactor::Handle;
 use websocket::server::r#async::Server;
 use websocket::client::r#async::{TcpStream, ClientNew};
 use websocket::message::OwnedMessage;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, IpAddr};
+use std::str::FromStr;
 use serde_json::json;
 use std::sync::{RwLock, Arc};
 use crate::sentry::{Command, Message, Client, MessageContent, MessageSource};
 use tokio::prelude::*;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
+use crate::sentry::config::Config;
 
 struct ClientTx {
     address: SocketAddr,
@@ -15,12 +17,14 @@ struct ClientTx {
 }
 
 pub struct ClientQueue {
+    config: Config,
     clients: Vec<ClientTx>,
 }
 
 impl ClientQueue {
-    fn new() -> Self {
+    fn new(config: Config) -> Self {
         ClientQueue {
+            config,
             clients: Vec::new(),
         }
     }
@@ -60,6 +64,7 @@ impl ClientQueue {
                 .unbounded_send(json!({
                     "queue_position": i,
                     "num_clients": len,
+                    "stun_server": self.config.video.stun_server,
                 })
                 .to_string())
                 .unwrap();
@@ -67,11 +72,12 @@ impl ClientQueue {
     }
 }
 
-pub fn start(addr: &SocketAddr, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
-    let clients = Arc::new(RwLock::new(ClientQueue::new()));
+    let clients = Arc::new(RwLock::new(ClientQueue::new(config.clone())));
     let clients2 = clients.clone();
+    let addr = SocketAddr::new(IpAddr::from_str("127.0.0.1").unwrap(), config.websocket.port);
 
     info!("Binding websocket server on {}...", addr);
     let mut server = Server::bind(&addr, handle).unwrap();
@@ -84,7 +90,7 @@ pub fn start(addr: &SocketAddr, handle: &Handle) -> (UnboundedSender<Message>, U
         })
         .for_each( move |(upgrade, addr)| {
             info!("Client {} has connected", addr);
-            handle_client(upgrade.accept(), addr, out_message_sink.clone(), clients.clone());
+            handle_client(upgrade.accept(), config.clone(), addr, out_message_sink.clone(), clients.clone());
             Ok(())
         })
     );
@@ -103,6 +109,7 @@ pub fn start(addr: &SocketAddr, handle: &Handle) -> (UnboundedSender<Message>, U
 
 fn handle_client(
     client: ClientNew<TcpStream>,
+    config: Config,
     addr: SocketAddr,
     out_message_sink: UnboundedSender<Message>,
     clients: Arc<RwLock<ClientQueue>>

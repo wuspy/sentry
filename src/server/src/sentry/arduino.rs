@@ -11,20 +11,20 @@ use tokio::prelude::*;
 use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use crc::crc16::checksum_usb as crc16;
+use crate::sentry::config::Config;
+use crate::sentry::MessageSource::Arduino;
 
-const MAX_PITCH_SPEED: u32 = 2000;
-const MAX_YAW_SPEED: u32 = 2500;
+struct ArduinoCodec {
+    config: Config,
+}
 
-const SETTINGS: SerialPortSettings = SerialPortSettings {
-    baud_rate: 115200,
-    parity: Parity::None,
-    data_bits: DataBits::Eight,
-    stop_bits: StopBits::One,
-    flow_control: FlowControl::None,
-    timeout: Duration::from_millis(10),
-};
-
-struct ArduinoCodec;
+impl ArduinoCodec {
+    pub fn new(config: Config) -> Self {
+        ArduinoCodec {
+            config,
+        }
+    }
+}
 
 impl Decoder for ArduinoCodec {
     type Item = MessageContent;
@@ -68,11 +68,11 @@ impl Encoder for ArduinoCodec {
             _ => 0,
         };
         BigEndian::write_i32(&mut message[3..], match item {
-            Command::Move {pitch, ..} =>  (pitch * MAX_PITCH_SPEED as f64) as i32,
+            Command::Move {pitch, ..} =>  (pitch * self.config.arduino.max_pitch_speed as f64) as i32,
             _ => 0,
         });
         BigEndian::write_i32(&mut message[7..], match item {
-            Command::Move {yaw, ..} =>  (yaw * MAX_YAW_SPEED as f64) as i32,
+            Command::Move {yaw, ..} =>  (yaw * self.config.arduino.max_yaw_speed as f64) as i32,
             _ => 0,
         });
         let crc = crc16(&message[2..]);
@@ -82,9 +82,18 @@ impl Encoder for ArduinoCodec {
     }
 }
 
-pub fn start(port: String, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
-    let arduino = Serial::from_path_with_handle(port, &SETTINGS, handle).unwrap();
-    let (arduino_sink, arduino_stream) = ArduinoCodec.framed(arduino).split();
+pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+    let serial_settings = SerialPortSettings {
+        baud_rate: config.arduino.baud,
+        parity: Parity::None,
+        data_bits: DataBits::Eight,
+        stop_bits: StopBits::One,
+        flow_control: FlowControl::None,
+        timeout: Duration::from_millis(10),
+    };
+
+    let arduino = Serial::from_path_with_handle(&config.arduino.device, &serial_settings, handle).unwrap();
+    let (arduino_sink, arduino_stream) = ArduinoCodec::new(config.clone()).framed(arduino).split();
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 

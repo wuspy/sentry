@@ -6,17 +6,20 @@ use tokio_io;
 use futures::{future, Future};
 use std::io;
 use std::prelude::*;
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::net::{SocketAddr, IpAddr};
+use std::str::FromStr;
+use crate::sentry::config::Config;
 
 type ResponseFuture = Box<Future<Item=Response<Body>, Error=io::Error> + Send>;
 
 /// Serves the directory at serve_root on addr
-pub fn start(addr: &SocketAddr, serve_root: String) {
-    info!("Starting HTTP server on {} serving {}", addr, serve_root);
-    tokio::spawn(Server::bind(addr)
+pub fn start(config: Config) {
+    let addr = SocketAddr::new(IpAddr::from_str("127.0.0.1").unwrap(), config.http_server.port);
+    let serve_root = config.http_server.directory.clone();
+    info!("Starting HTTP server on {} serving {}", addr, config.http_server.directory);
+    tokio::spawn(Server::bind(&addr)
         .serve(move || {
-            let serve_root = serve_root.clone();
+            let serve_root = config.http_server.directory.clone();
             service_fn(move |req| serve(req, serve_root.clone()))
         })
         .map_err(|_| ())
