@@ -1,8 +1,8 @@
 extern crate serde_json;
 extern crate glib;
-extern crate gstreamer as gst;
-extern crate gstreamer_sdp as gst_sdp;
-extern crate gstreamer_webrtc as gst_webrtc;
+extern crate gstreamer;
+extern crate gstreamer_sdp;
+extern crate gstreamer_webrtc;
 extern crate tokio;
 extern crate tokio_serial;
 extern crate tokio_fs;
@@ -12,6 +12,7 @@ extern crate byteorder;
 extern crate hyper;
 
 use std::net::SocketAddr;
+use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 
 #[derive(Clone)]
 pub enum Command {
@@ -44,7 +45,8 @@ pub struct Client {
 #[derive(Clone)]
 pub enum MessageSource {
     Arduino,
-    Server,
+    WebsocketServer,
+    VideoServer,
     Client (Client),
 }
 
@@ -57,11 +59,20 @@ pub enum MessageContent {
     },
     Command (Command),
     WebRtcOffer {
-        offer: String,
+        offer: gstreamer_webrtc::WebRTCSessionDescription,
+        for_client: SocketAddr,
     },
-    WebRtcResponse {
-        response: String,
-        to: SocketAddr
+    WebRtcAnswer {
+        answer: String,
+    },
+    ServerIceCandidate {
+        candidate: String,
+        sdp_mline_index: u32,
+        for_client: SocketAddr,
+    },
+    ClientIceCandidate {
+        candidate: String,
+        sdp_mline_index: u32,
     },
     ClientConnected (Client),
     ClientDisconnected (Client),
@@ -73,8 +84,12 @@ pub struct Message {
     pub source: MessageSource,
 }
 
+pub type StartResult<T> = Result<T, String>;
+pub type UnboundedChannel<T> = (UnboundedSender<T>, UnboundedReceiver<T>);
+
 pub mod http_server;
 pub mod websocket_server;
+pub mod stun_server;
 pub mod arduino;
 pub mod video;
 pub mod config;

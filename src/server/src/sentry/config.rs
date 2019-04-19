@@ -1,6 +1,7 @@
 use std::fs;
 use std::env;
 use std::prelude::*;
+use crate::sentry::StartResult;
 
 #[derive(Clone, Deserialize)]
 pub struct ArduinoConfig {
@@ -12,10 +13,9 @@ pub struct ArduinoConfig {
 
 #[derive(Clone, Deserialize)]
 pub struct VideoConfig {
-    pub device: String,
-    pub bitrate: u32,
-    pub height: u16,
-    pub stun_server: String,
+    pub encoder: String,
+    pub stun_host: String,
+    pub stun_port: u16,
 }
 
 #[derive(Clone, Deserialize)]
@@ -37,7 +37,7 @@ pub struct Config {
     pub arduino: ArduinoConfig,
 }
 
-pub fn load() -> Result<Config, String> {
+pub fn load() -> StartResult<Config> {
     let mut path = env::current_exe().map_err(|err| err.to_string())?;
     path.pop();
     path.push("config.toml");

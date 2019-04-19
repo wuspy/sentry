@@ -8,7 +8,7 @@ use bytes::{BytesMut, BufMut};
 use tokio_serial::{Serial, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
 use futures::{Stream, Sink};
 use tokio::prelude::*;
-use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource};
+use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource, StartResult, UnboundedChannel};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use crc::crc16::checksum_usb as crc16;
 use crate::sentry::config::Config;
@@ -82,7 +82,7 @@ impl Encoder for ArduinoCodec {
     }
 }
 
-pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Message>> {
     let serial_settings = SerialPortSettings {
         baud_rate: config.arduino.baud,
         parity: Parity::None,
@@ -92,7 +92,9 @@ pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, Unbo
         timeout: Duration::from_millis(10),
     };
 
-    let arduino = Serial::from_path_with_handle(&config.arduino.device, &serial_settings, handle).unwrap();
+    let arduino = Serial::from_path_with_handle(&config.arduino.device, &serial_settings, handle)
+        .map_err(|err| format!("Cannot open {}: {}", &config.arduino.device, err))?;
+
     let (arduino_sink, arduino_stream) = ArduinoCodec::new(config.clone()).framed(arduino).split();
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
@@ -132,5 +134,5 @@ pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, Unbo
         .and_then(|_| Ok(()))
     );
 
-    (in_message_sink, out_message_stream)
+    Ok((in_message_sink, out_message_stream))
 }

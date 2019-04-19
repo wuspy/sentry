@@ -6,7 +6,7 @@ use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use serde_json::json;
 use std::sync::{RwLock, Arc};
-use crate::sentry::{Command, Message, Client, MessageContent, MessageSource};
+use crate::sentry::{Command, Message, Client, MessageContent, MessageSource, StartResult, UnboundedChannel};
 use tokio::prelude::*;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
 use crate::sentry::config::Config;
@@ -64,7 +64,7 @@ impl ClientQueue {
                 .unbounded_send(json!({
                     "queue_position": i,
                     "num_clients": len,
-                    "stun_server": self.config.video.stun_server,
+                    "stun_server": format!("{}:{}", &self.config.video.stun_host.as_str(), self.config.video.stun_port),
                 })
                 .to_string())
                 .unwrap();
@@ -72,15 +72,17 @@ impl ClientQueue {
     }
 }
 
-pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, UnboundedReceiver<Message>) {
+pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Message>> {
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
     let clients = Arc::new(RwLock::new(ClientQueue::new(config.clone())));
     let clients2 = clients.clone();
-    let addr = SocketAddr::new(IpAddr::from_str("127.0.0.1").unwrap(), config.websocket.port);
+    let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), config.websocket.port);
 
     info!("Binding websocket server on {}...", addr);
-    let mut server = Server::bind(&addr, handle).unwrap();
+    let mut server = Server::bind(&addr, handle)
+        .map_err(|err| format!("Could not bind websocket server: {}", err))?;
+
     info!("Websocket server running");
 
     tokio::spawn(server
@@ -99,12 +101,20 @@ pub fn start(config: Config, handle: &Handle) -> (UnboundedSender<Message>, Unbo
         .map_err(|_| ())
         .for_each(move |message| {
             let clients = clients2.clone();
-            // TODO
+            match message.content {
+                MessageContent::ServerIceCandidate {for_client, candidate, sdp_mline_index} => {
+                    // TODO
+                },
+                MessageContent::WebRtcOffer {for_client, offer } => {
+                    // TODO
+                },
+                _ => {}
+            }
             Ok(())
         })
     );
 
-    (in_message_sink, out_message_stream)
+    Ok((in_message_sink, out_message_stream))
 }
 
 fn handle_client(
@@ -139,7 +149,7 @@ fn handle_client(
                         address: addr,
                         queue_position,
                     }),
-                    source: MessageSource::Server,
+                    source: MessageSource::WebsocketServer,
                 })
                 // Process the client's incoming messages
                 .and_then(move |app_sink| {
@@ -176,7 +186,7 @@ fn handle_client(
                                             address: addr,
                                             queue_position,
                                         }),
-                                        source: MessageSource::Server,
+                                        source: MessageSource::WebsocketServer,
                                     })
                                 },
                                 _ => None

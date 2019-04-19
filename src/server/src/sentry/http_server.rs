@@ -9,21 +9,25 @@ use std::prelude::*;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use crate::sentry::config::Config;
+use crate::sentry::StartResult;
 
 type ResponseFuture = Box<Future<Item=Response<Body>, Error=io::Error> + Send>;
 
 /// Serves the directory at serve_root on addr
-pub fn start(config: Config) {
-    let addr = SocketAddr::new(IpAddr::from_str("127.0.0.1").unwrap(), config.http_server.port);
+pub fn start(config: Config) -> StartResult<()> {
+    let addr = SocketAddr::new("127.0.0.1".parse().unwrap(), config.http_server.port);
     let serve_root = config.http_server.directory.clone();
     info!("Starting HTTP server on {} serving {}", addr, config.http_server.directory);
-    tokio::spawn(Server::bind(&addr)
+    tokio::spawn(Server::try_bind(&addr)
+        .map_err(|err| format!("Error starting HTTP server: {}", err))?
         .serve(move || {
             let serve_root = config.http_server.directory.clone();
             service_fn(move |req| serve(req, serve_root.clone()))
         })
         .map_err(|_| ())
     );
+
+    Ok(())
 }
 
 fn serve(req: Request<Body>, serve_root: String) -> ResponseFuture {
