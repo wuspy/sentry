@@ -14,25 +14,19 @@ pub struct ArduinoConfig {
 #[derive(Clone, Deserialize)]
 pub struct VideoConfig {
     pub encoder: String,
-    pub stun_host: String,
-    pub stun_port: u16,
+    pub decoder: String,
+    pub host: String,
 }
 
 #[derive(Clone, Deserialize)]
-pub struct WsServerConfig {
+pub struct TcpServerConfig {
+    pub host: String,
     pub port: u16,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct HttpServerConfig {
-    pub port: u16,
-    pub directory: String,
 }
 
 #[derive(Clone, Deserialize)]
 pub struct Config {
-    pub websocket: WsServerConfig,
-    pub http_server: HttpServerConfig,
+    pub server: TcpServerConfig,
     pub video: VideoConfig,
     pub arduino: ArduinoConfig,
 }

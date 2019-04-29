@@ -1,23 +1,119 @@
 use std::prelude::*;
 use gstreamer::prelude::*;
 use gstreamer as gst;
-use gstreamer_sdp as gst_sdp;
-use gstreamer_webrtc as gst_webrtc;
 use tokio::prelude::*;
-use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
-use crate::sentry::{Message, StartResult, UnboundedChannel, MessageSource, MessageContent};
-use gstreamer::State;
+use futures::future;
+use futures::sync::mpsc::{UnboundedSender, unbounded};
+use crate::sentry::{Message, StartResult, UnboundedChannel, MessageContent, Client, MessageSource};
+use gstreamer::{ClockTime};
 use crate::sentry::config::Config;
-use std::net::SocketAddr;
-use std::collections::HashMap;
+use std::net::{SocketAddr, IpAddr};
+use tokio::net::UdpSocket;
+use tokio::prelude::*;
+use rand::prelude::*;
+
+struct UdpHandshakeComplete {
+    server_addr: SocketAddr,
+    client_addr: SocketAddr,
+}
+
+struct UdpHandshake {
+    socket: Option<UdpSocket>,
+    local_addr: SocketAddr,
+    client_addr: SocketAddr,
+    buf: [u8; 32],
+    nonce: String,
+    out_message_sink: UnboundedSender<Message>
+}
+
+impl UdpHandshake {
+    fn begin(config: &Config, client: &Client, out_message_sink: UnboundedSender<Message>) -> Result<Self, String> {
+        let addr = SocketAddr::new(config.video.host.as_str().parse().unwrap(), 0);
+        let socket = UdpSocket::bind(&addr)
+            .map_err(|err| format!("Could not bind UDP socket for video streaming: {}", err))?;
+        let local_addr = socket.local_addr()
+            .map_err(|err| format!("Could not get local address for UDP socket: {}", err))?;
+        let nonce: String = thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(32)
+            .collect();
+
+        out_message_sink.unbounded_send(Message {
+            content: MessageContent::VideoOffer {
+                nonce: nonce.to_owned(),
+                for_client: client.address,
+                rtp_address: local_addr,
+            },
+            source: MessageSource::VideoServer,
+        });
+
+        Ok(UdpHandshake {
+            socket: Some(socket),
+            local_addr,
+            client_addr: client.address,
+            buf: [0; 32],
+            nonce,
+            out_message_sink,
+        })
+    }
+}
+
+impl Future for UdpHandshake {
+    type Item = UdpHandshakeComplete;
+    type Error = String;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            let (_, client_addr) = try_ready!(self.socket
+                .as_mut()
+                .expect("poll() called after future already completed")
+                .poll_recv_from(&mut self.buf)
+                .map_err(|err| format!("UDP Socket read error: {}",  err))
+                );
+
+            if client_addr.ip() != self.client_addr.ip() {
+                warn!("Received UDP handshake message from wrong address (from {}, expecting {})", client_addr.ip(), self.client_addr.ip());
+                continue;
+            }
+            if self.buf.len() == 0 {
+                warn!("Received empty UDP handshake message");
+                continue;
+            }
+
+            // Drop the socket before returning so the port will be available again
+            drop(self.socket.take());
+            let response = String::from_utf8_lossy(&self.buf).to_string();
+            return if response == self.nonce {
+                self.out_message_sink.unbounded_send(Message {
+                    content: MessageContent::VideoStreaming {
+                        for_client: self.client_addr,
+                    },
+                    source: MessageSource::VideoServer,
+                });
+                Ok(futures::Async::Ready(UdpHandshakeComplete {
+                    server_addr: self.local_addr,
+                    client_addr,
+                }))
+            } else {
+                Err(format!("Received invalid nonce from {} (expected {}, got {})",  self.client_addr, self.nonce, response))
+            };
+        }
+    }
+}
 
 pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
+    gst::init().map_err(|err| format!("Could not initialize GStreamer: {}", err))?;
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
     let pipeline = gst::Pipeline::new("pipeline");
     let bin = gst::parse_bin_from_description(config.video.encoder.as_str(), true)
         .map_err(|err| format!("Could not parse GStreamer encoder: {}", err))?;
+    let tee = gst::ElementFactory::find("tee")
+        .unwrap()
+        .create("tee")
+        .unwrap();
+
     let bus = pipeline.get_bus().ok_or(format!("Could not get bus for pipeline"))?;
 
     bus.add_watch(move |_, msg| {
@@ -37,32 +133,29 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
         glib::Continue(true)
     });
 
-    let tee = gst::ElementFactory::make("tee", "tee")
-        .ok_or(format!("Could not create tee element"))?;
-
-    pipeline.add(&bin).map_err(|_| format!("Could not add encoder to pipeline"))?;
+    pipeline.add(&bin).map_err(|_| format!("Could not add \"{}\" to pipeline", config.video.encoder))?;
     pipeline.add(&tee).map_err(|_| format!("Could not add tee to pipeline"))?;
-    bin.link(&tee).map_err(|_| format!("Could not link encoder to tee"))?;
-
-    pipeline.set_state(State::Playing)
-        .map_err(|err| format!("Could not set pipeline playing: {}", err))?;
-
-    info!("GStreamer pipeline playing");
+    bin.link(&tee).map_err(|_| format!("Could not link \"{}\" to tee", config.video.encoder))?;
 
     tokio::spawn(in_message_stream
         .map_err(|_| ())
         .for_each(move |message| {
-            match &message.content {
+            match message.content {
                 MessageContent::ClientConnected(client) => {
-                    info!("Creating webrtc sink for client {}", client.address);
-                    add_webrtc_sink(
-                        client.address,
-                        pipeline.clone(),
-                        config.clone(),
-                        out_message_sink.clone()
+                    tokio::spawn(
+                        handle_new_client(
+                            pipeline.clone(),
+                            config.clone(),
+                            client.clone(),
+                            out_message_sink.clone()
+                        ).map_err(move |err| error!("Error adding video sink for {}: {}", client.address, err))
                     );
                 },
-                _ => {},
+                MessageContent::ClientDisconnected(client) => {
+                    handle_dropped_client(&pipeline, &client)
+                        .map_err(move|err| error!("Error dropping video sink for {}: {}", client.address, err));
+                },
+                _ => {}
             }
             Ok(())
         })
@@ -71,89 +164,69 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     Ok((in_message_sink, out_message_stream))
 }
 
-fn add_webrtc_sink(
-    client: SocketAddr,
-    pipeline: gst::Pipeline,
-    config: Config,
-    out_message_sink: UnboundedSender<Message>
-) -> Result<(), String> {
-    let queue = gst::ElementFactory::make("queue", format!("queue_{}", client).as_str())
-        .ok_or(format!("Could not create queue element"))?;
-    let webrtc = gst::ElementFactory::make("webrtcbin", format!("webrtc_{}", client).as_str())
-        .ok_or(format!("Could not create webrtc element"))?;
-    let out_message_sink_clone = out_message_sink.clone();
+fn get_client_sink_name(client: &Client) -> String {
+    format!("sink_{}", client.address)
+}
 
-    webrtc.set_property_from_str("stun-server", format!("{}:{}", &config.video.stun_host, config.video.stun_port).as_str());
-    webrtc.set_property_from_str("bundle-policy", "max-bundle");
+fn get_client_sink(pipeline: &gst::Pipeline, client: &Client) -> Result<gst::Element, String> {
+    pipeline
+        .get_by_name(get_client_sink_name(client).as_str())
+        .ok_or(format!("Could not find sink for client {}", client.address))
+}
 
-    webrtc.connect("on-negotiation-needed", false, move |values| {
-        on_negotiation_needed(values, client, out_message_sink.clone());
-        None
-    }).map_err(|_| format!("Could not connect on-negotiation-needed signal"))?;
+fn get_tee(pipeline: &gst::Pipeline) -> Result<gst::Element, String> {
+    pipeline
+        .get_by_name("tee")
+        .ok_or(format!("Could not find element tee"))
+}
 
-    webrtc.connect("on-ice-candidate", false, move |values| {
-        on_ice_candidate(values, client, out_message_sink_clone.clone());
-        None
-    }).map_err(|_| format!("Could not connect on-ice-candidate signal"))?;
-
-    pipeline.add_many(&[
-        &queue,
-        &webrtc,
-    ]).map_err(|_| format!("Could not add webrtc element to pipeline"))?;
-
-    gst::Element::link_many(&[
-        &pipeline.get_by_name("tee").unwrap(),
-        &queue,
-        &webrtc,
-    ]).map_err(|_| format!("Failed to link webrtc to pipeline"))?;
-
+fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<(), String> {
+    let sink = get_client_sink(pipeline, client)?;
+    get_tee(pipeline)?.unlink(&sink);
+    pipeline.remove(&sink).map_err(|_| format!("Could not remove sink from pipeline"))?;
+    if pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
+        // There are no more sinks, so stop the pipeline
+        info!("Stopping GStreamer pipeline");
+        pipeline.set_state(gst::State::Ready);
+    }
     Ok(())
 }
 
-fn on_negotiation_needed(
-    values: &[glib::Value],
-    client: SocketAddr,
+fn handle_new_client(
+    pipeline: gst::Pipeline,
+    config: Config,
+    client: Client,
     out_message_sink: UnboundedSender<Message>
-) {
-    let webrtc = values[0].get::<gst::Element>().unwrap();
-    let webrtc_clone = webrtc.clone();
-    let promise = gst::Promise::new_with_change_func(move |promise| {
-        let offer = promise
-            .get_reply()
-            .unwrap()
-            .get_value("offer")
-            .unwrap()
-            .get::<gst_webrtc::WebRTCSessionDescription>()
-            .unwrap();
+) -> impl Future<Item=(), Error=String> {
+    match UdpHandshake::begin(&config, &client, out_message_sink.clone()) {
+        Err(err) => future::Either::A(future::err(err)),
+        Ok(handshake) => future::Either::B(handshake
+            .and_then(move |handshake: UdpHandshakeComplete| {
+                info!("UDP handshake succeeded for client {}", client.address);
+                let sink = gst::ElementFactory::make("udpsink", get_client_sink_name(&client).as_str())
+                    .ok_or(format!("Could not create udpsink element"))?;
 
-        webrtc.emit("set-local-description", &[&offer, &None::<gst::Promise>]);
+                sink.set_property_from_str("bind-address", format!("{}", handshake.server_addr.ip()).as_str());
+                sink.set_property_from_str("bind-port", format!("{}", handshake.server_addr.port()).as_str());
+                sink.set_property_from_str("host", format!("{}", handshake.client_addr.ip()).as_str());
+                sink.set_property_from_str("port", format!("{}", handshake.client_addr.port()).as_str());
 
-        out_message_sink.unbounded_send(Message {
-            content: MessageContent::WebRtcOffer {
-                for_client: client,
-                offer: offer.clone(),
-            },
-            source: MessageSource::VideoServer,
-        });
-    });
+                pipeline.add(&sink)
+                    .map_err(|_| format!("Could not add sink to pipeline"))?;
 
-    webrtc_clone.emit("create-offer", &[&None::<gst::Structure>, &promise]);
-}
+                get_tee(&pipeline)?
+                    .link(&sink)
+                    .map_err(|_| format!("Could not link tee to sink"))?;
 
-fn on_ice_candidate(
-    values: &[glib::Value],
-    client: SocketAddr,
-    out_message_sink: UnboundedSender<Message>
-) {
-    let sdp_mline_index = values[1].get::<u32>().unwrap();
-    let candidate = values[2].get::<String>().unwrap();
+                // Make sure the pipeline is playing
+                info!("Setting gstreamer pipeline playing");
+                pipeline
+                    .set_state(gst::State::Playing)
+                    .map_err(|_| format!("Could not play pipeline"))?;
 
-    out_message_sink.unbounded_send(Message {
-        content: MessageContent::ServerIceCandidate {
-            for_client: client,
-            candidate,
-            sdp_mline_index,
-        },
-        source: MessageSource::VideoServer,
-    });
+                Ok(())
+            })
+            .map_err(|err| format!("{}", err))
+        )
+    }
 }

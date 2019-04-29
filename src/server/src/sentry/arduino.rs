@@ -12,7 +12,6 @@ use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSou
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use crc::crc16::checksum_usb as crc16;
 use crate::sentry::config::Config;
-use crate::sentry::MessageSource::Arduino;
 
 struct ArduinoCodec {
     config: Config,

@@ -2,8 +2,9 @@
 extern crate log;
 #[macro_use]
 extern crate serde_derive;
-extern crate simplelog;
+#[macro_use]
 extern crate futures;
+extern crate simplelog;
 extern crate tokio;
 extern crate toml;
 extern crate gstreamer as gst;
@@ -19,9 +20,31 @@ use crate::sentry::*;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 
+use serde_json::json;
+
 mod sentry;
 use sentry::StartResult;
 use sentry::config::Config;
+
+/// Broadcasts one receiver to a list of senders
+macro_rules! broadcast {
+    ($receiver:expr, $senders:expr) => {{
+        let senders: Vec<_> = $senders
+            .into_iter()
+            .map(|sender| sender.clone())
+            .collect();
+
+        tokio::spawn($receiver
+            .map_err(|_| ())
+            .for_each(move |message| {
+                senders.iter().for_each(|sender| {
+                    sender.unbounded_send(message.clone());
+                });
+                Ok(())
+            })
+        );
+    }}
+}
 
 fn main() {
     TermLogger::init(LevelFilter::Info, LogConfig::default()).unwrap();
@@ -39,33 +62,15 @@ fn main() {
 }
 
 fn run(runtime: Runtime) -> StartResult<()> {
-    gst::init().map_err(|err| format!("Could not initialize GStreamer: {}", err))?;
-
     let reactor = runtime.reactor();
     let config = sentry::config::load()?;
-    let (server_tx, server_rx) = sentry::websocket_server::start(config.clone(), reactor)?;
-    let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor)?;
-    //let (video_tx, video_rx) = sentry::video::start(config.clone())?;
-    sentry::http_server::start(config.clone())?;
-    sentry::stun_server::start(config.clone())?;
+    let (server_tx, server_rx) = sentry::server::start(config.clone())?;
+    //let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor)?;
+    let (video_tx, video_rx) = sentry::video::start(config.clone())?;
 
-    tokio::spawn(arduino_rx
-        .map_err(|_| ())
-        .for_each(move |message| {
-//            server_tx.unbounded_send(message.clone()).unwrap();
-//            video_tx.unbounded_send(message).unwrap();
-            Ok(())
-        })
-    );
-
-    tokio::spawn(server_rx
-        .map_err(|_| ())
-        .for_each(move |message| {
-            arduino_tx.unbounded_send(message.clone()).unwrap();
-            //video_tx.unbounded_send(message).unwrap();
-            Ok(())
-        })
-    );
+    broadcast!(server_rx, vec![&video_tx]);
+    //broadcast!(arduino_rx, vec![&server_tx, &video_tx]);
+    broadcast!(video_rx, vec![&server_tx]);
 
     Ok(())
 }

@@ -1,0 +1,18 @@
+[package]
+name = "sentry_video"
+version = "0.1.0"
+authors = ["Jacob Jordan"]
+edition = "2018"
+build = "build.rs"
+
+[dependencies]
+jni = "0.12.0"
+glib = "0.7"
+gstreamer = "0.13"
+gstreamer-video = "0.13"
+log = "0.4.6"
+android_logger = "0.8.3"
+
+[lib]
+name = "sentry_video"
+crate_type = ["cdylib"]

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="JoystickView">
+        <attr name="zone_color" format="color" />
+        <attr name="border_color" format="color" />
+        <attr name="button_color" format="color" />
+        <attr name="border_width" format="dimension" />
+        <attr name="zone_diameter" format="dimension" />
+        <attr name="button_diameter" format="dimension" />
+        <attr name="interval" format="integer" />
+    </declare-styleable>
+</resources>
