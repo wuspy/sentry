@@ -56,9 +56,13 @@ class MainActivity : Activity() {
             }
         })
 
+        joystick.interval = 50 // ms
+        joystick.setOnUpdateListener {
+            tx.println("""{"pitch":${it.y},"yaw":${it.x}}""")
+        }
+
         fire_button.setOnClickListener {
-            Log.i("Main", "Fire clicked")
-            tx.println("""{"command":"fire"}""")
+            Thread(Runnable { tx.println("""{"command":"fire"}""") }).start()
         }
 
         val handler = Handler {
@@ -122,7 +126,7 @@ class MainActivity : Activity() {
                 handler.sendMessage(message)
 
                 val rx = BufferedReader(InputStreamReader(socket.getInputStream()))
-                tx = PrintWriter(socket.getOutputStream())
+                tx = PrintWriter(socket.getOutputStream(), true)
                 socket_loop@while (!socket.isClosed) {
                     if (isPausing) {
                         Log.i("Main", "Closing socket due to pausing")
@@ -213,9 +217,11 @@ class MainActivity : Activity() {
 
         if (connected && queuePosition == 0) {
             joystick.visibility = View.VISIBLE
+            joystick.isEnabled = true
             fire_button.visibility = View.VISIBLE
         } else {
             joystick.visibility = View.GONE
+            joystick.isEnabled = false
             fire_button.visibility = View.GONE
         }
     }
