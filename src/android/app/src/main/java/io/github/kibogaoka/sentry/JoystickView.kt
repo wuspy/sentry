@@ -13,10 +13,6 @@ import kotlin.math.*
 
 class JoystickView : View {
 
-    interface OnUpdateListener {
-        fun onUpdate(position: PointF)
-    }
-
     // Default sizes in DP
     var zoneDiameter = 200f
 
@@ -51,9 +47,15 @@ class JoystickView : View {
     var interval: Long = 0
         set(value) {
             field = value
-            _timer.cancel()
+            _timer?.cancel()
+            _timer = null
             if (value > 0) {
-                _timer.scheduleAtFixedRate(0, interval) { emitPosition() }
+                _timer = Timer()
+                _timer!!.scheduleAtFixedRate(0, interval) {
+                    if (isEnabled) {
+                        _listener?.invoke(location)
+                    }
+                }
             }
         }
 
@@ -63,12 +65,13 @@ class JoystickView : View {
     private var _pressed = false
     private var _ringAnimator = ValueAnimator()
     private var _origin = PointF()
+    private var _rawLocation = PointF()
     private var _animatedSize = 0f
     private var _zonePaint = Paint()
     private var _borderPaint = Paint()
     private var _buttonPaint = Paint()
-    private var _timer = Timer()
-    private var _listener: OnUpdateListener? = null
+    private var _timer: Timer? = null
+    private var _listener: ((PointF) -> Unit)? = null
 
     constructor (context: Context?) : super(context) {
         init(null)
@@ -86,6 +89,10 @@ class JoystickView : View {
     constructor(context: Context?, attributes: AttributeSet, defStyleAttr: Int, defStyleRes: Int)
             : super(context, attributes, defStyleAttr, defStyleRes) {
         init(attributes)
+    }
+
+    fun setOnUpdateListener(listener: ((PointF) -> Unit)?) {
+        _listener = listener
     }
 
     private fun init(attributes: AttributeSet?) {
@@ -110,6 +117,8 @@ class JoystickView : View {
         borderColor = ta.getColor(R.styleable.JoystickView_border_color, borderColor)
         buttonColor = ta.getColor(R.styleable.JoystickView_button_color, buttonColor)
 
+        interval = ta.getInt(R.styleable.JoystickView_interval, interval.toInt()).toLong()
+
         _zonePaint.style = Paint.Style.STROKE
         _borderPaint.style = Paint.Style.STROKE
 
@@ -118,10 +127,6 @@ class JoystickView : View {
         _buttonPaint.flags = Paint.ANTI_ALIAS_FLAG
 
         ta.recycle()
-    }
-
-    private fun emitPosition() {
-        _listener?.onUpdate(location)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -133,8 +138,8 @@ class JoystickView : View {
         }
         if (_pressed) {
             // Draw button
-            canvas.drawCircle(location.x + _origin.x, location.y + _origin.y, buttonDiameter / 2, _buttonPaint)
-            canvas.drawCircle(location.x + _origin.x, location.y + _origin.y, buttonDiameter / 2, _borderPaint)
+            canvas.drawCircle(_rawLocation.x + _origin.x, _rawLocation.y + _origin.y, buttonDiameter / 2, _buttonPaint)
+            canvas.drawCircle(_rawLocation.x + _origin.x, _rawLocation.y + _origin.y, buttonDiameter / 2, _borderPaint)
         }
     }
 
@@ -163,20 +168,36 @@ class JoystickView : View {
                 _ringAnimator.start()
             }
         }
-        location.x = event.x - _origin.x
-        location.y = event.y - _origin.y
+        _rawLocation.x = event.x - _origin.x
+        _rawLocation.y = event.y - _origin.y
 
         // Convert cartesian coordinates to polar and constrain the magnitude
-        val angle = atan(location.y / location.x)
-        var magnitude = min(sqrt(location.x * location.x + location.y * location.y), zoneDiameter / 2)
-        if (location.x < 0) {
+        val angle = atan(when {
+            _rawLocation.x == 0f -> when {
+                _rawLocation.y > 0 -> Float.POSITIVE_INFINITY
+                _rawLocation.y < 0 -> Float.NEGATIVE_INFINITY
+                else -> 0f
+            }
+            else -> _rawLocation.y / _rawLocation.x
+        })
+        val zoneRadius = zoneDiameter / 2
+        var magnitude = min(sqrt(_rawLocation.x * _rawLocation.x + _rawLocation.y * _rawLocation.y), zoneRadius)
+        if (_rawLocation.x < 0) {
             magnitude = -magnitude
         }
 
         // Convert polar coordinates back to cartesian
-        location.x = cos(angle) * magnitude
-        location.y = sin(angle) * magnitude
+        _rawLocation.x = cos(angle) * magnitude
+        _rawLocation.y = sin(angle) * magnitude
 
+        // Convert rawLocation to be bounded [-1, 1]
+        if (_pressed) {
+            location.x = _rawLocation.x / zoneRadius
+            location.y = -_rawLocation.y / zoneRadius
+        } else {
+            location.x = 0f
+            location.y = 0f
+        }
         invalidate()
         return true
     }
