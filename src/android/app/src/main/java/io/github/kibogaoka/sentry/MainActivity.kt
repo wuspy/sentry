@@ -1,9 +1,7 @@
 package io.github.kibogaoka.sentry
 
 import android.app.Activity
-import android.os.Bundle
-import android.os.Handler
-import android.os.Message
+import android.content.Context
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -13,10 +11,19 @@ import org.json.JSONObject
 import java.io.*
 import java.lang.Exception
 import java.net.*
+import android.content.Context.VIBRATOR_SERVICE
+import android.content.Intent
+import android.content.SharedPreferences
+import android.opengl.Visibility
+import android.os.*
+import android.preference.PreferenceManager
+import android.view.View.*
 
 class MainActivity : Activity() {
 
     companion object {
+        private val logTag = "sentry"
+
         init {
             System.loadLibrary("sentry_video")
         }
@@ -28,117 +35,129 @@ class MainActivity : Activity() {
     private external fun stopVideo()
     private external fun initVideo(): String
 
-    private lateinit var networkThread: Thread
-    private lateinit var tx: PrintWriter
+    private var networkThread: Thread? = null
+    private var socket: Socket? = null
+    private lateinit var vibrator: Vibrator
+    private var tx: PrintWriter? = null
     private val holePuncher = UdpHolePuncher()
-    private var isPausing = false
+    private var isStopped = false
     private var connected = false
     private var queuePosition = 0
     private var videoError = ""
+    private var sentryState = "ready"
+    private lateinit var serverAddress: InetSocketAddress
+    private lateinit var preferences: SharedPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
     }
 
-    override fun onResume() {
-        super.onResume()
-
+    override fun onStart() {
+        Log.i(logTag, "Starting")
+        super.onStart()
         initVideo()
-        updateUi()
+
+        vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        preferences = PreferenceManager.getDefaultSharedPreferences(this)
+        serverAddress = try {
+            parseSocketAddress(preferences.getString("server_host", "")!!)
+        } catch (e: Exception) {
+            SettingsActivity.DEFAULT_SERVER_ADDRESS
+        }
 
         video_surface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) { }
             override fun surfaceDestroyed(holder: SurfaceHolder) { }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                Log.i(logTag, "Video surface changed")
                 setVideoSurface(holder.surface)
+                startNetwork()
             }
         })
 
         joystick.interval = 50 // ms
         joystick.setOnUpdateListener {
-            tx.println("""{"pitch":${it.y},"yaw":${it.x}}""")
+            tx?.println(String.format("""{"pitch":%.3f,"yaw":%.3f}""", it.y, it.x))
         }
 
         fire_button.setOnClickListener {
-            Thread(Runnable { tx.println("""{"command":"fire"}""") }).start()
+            vibrateButtonPress()
+            sendCommand("fire")
         }
 
-        val handler = Handler {
-
-                Log.i("Main", "Got ${it.data.getString("type")!!} message")
-                when (it.data.getString("type")!!) {
-                    "connected" -> {
-                        this.connected = true
-                        updateUi()
-                    }
-                    "disconnected" -> {
-                        this.connected = false
-                        stopVideo()
-                        this.videoError = ""
-                        updateUi()
-                    }
-                    "queue_position" -> {
-                        this.queuePosition = it.data.getInt("queue_position")
-                        this.updateUi()
-                    }
-                    "video_offer" -> {
-                        val address = parseSocketAddress(it.data.getString("rtp_address")!!)
-                        val message = it.data.getString("nonce")!!
-                        holePuncher.start(address, message)
-                    }
-                    "video_streaming" -> {
-                        holePuncher.stop()
-                        this.videoError = playVideo("""
-                            udpsrc port=${holePuncher.boundPort!!} !
-                            ${it.data.getString("gstreamer_command")!!}
-                        """)
-                        updateUi()
-                    }
-                }
-
-            false
+        home_button.setOnClickListener {
+            vibrateButtonPress()
+            toggleMenu()
+            sendCommand("home")
         }
 
-        isPausing = false
+        open_breach_button.setOnClickListener {
+            vibrateButtonPress()
+            toggleMenu()
+            sendCommand("open_breach")
+        }
+
+        close_breach_button.setOnClickListener {
+            vibrateButtonPress()
+            toggleMenu()
+            sendCommand("close_breach")
+        }
+
+        menu_button.setOnClickListener { toggleMenu() }
+
+        set_server_address_button.setOnClickListener {
+            finish()
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        updateUi()
+    }
+
+    override fun onStop() {
+        Log.i(logTag, "Stopping")
+        stopVideo()
+        stopNetwork()
+        super.onStop()
+    }
+
+    private fun startNetwork() {
+        isStopped = false
+        if (networkThread != null) {
+            return
+        }
+        Log.i(logTag, "Initializing network")
         networkThread = Thread(Runnable {
-            fun createMessage(): Message {
-                val message = Message()
-                message.data = Bundle()
-                return message
-            }
-
-            while (!isPausing) {
-                var message: Message
-                val socket = Socket()
+            while (!isStopped) {
+                socket = Socket()
                 try {
-                    socket.connect(InetSocketAddress("192.168.10.101", 8080), 1000)
-                    socket.soTimeout = 100
+                    socket!!.connect(serverAddress, 5000)
+                    socket!!.soTimeout = 5000
                 } catch (e: Exception) {
-                    Log.w("Main", "Socket failed to connect: ${e.message}")
-                    Thread.sleep(100)
+                    socket!!.close()
+                    Log.w(logTag, "Socket failed to connect: ${e.message}")
+                    Thread.sleep(500)
                     continue
                 }
 
-                message = createMessage()
-                message.data.putString("type", "connected")
-                handler.sendMessage(message)
+                this.connected = true
+                runOnUiThread { updateUi() }
 
-                val rx = BufferedReader(InputStreamReader(socket.getInputStream()))
-                tx = PrintWriter(socket.getOutputStream(), true)
-                socket_loop@while (!socket.isClosed) {
-                    if (isPausing) {
-                        Log.i("Main", "Closing socket due to pausing")
-                        socket.close()
-                        return@Runnable
+                val rx = BufferedReader(InputStreamReader(socket!!.getInputStream()))
+                tx = PrintWriter(socket!!.getOutputStream(), true)
+                socket_loop@while (!socket!!.isClosed) {
+                    if (isStopped) {
+                        Log.i(logTag, "Closing socket")
+                        socket!!.close()
+                        break@socket_loop
                     }
 
                     val line = try {
                         when (val line = rx.readLine()) {
                             null -> {
-                                socket.close()
-                                Log.w("Main", "Received null from socket")
+                                socket!!.close()
+                                Log.w(logTag, "Received null from socket")
                                 continue@socket_loop
                             }
                             else -> line
@@ -148,90 +167,137 @@ class MainActivity : Activity() {
                     }
 
                     try {
+                        Log.d(logTag, "Server message: `$line`")
                         val json = JSONObject(line)
-                        message = createMessage()
-
                         when {
                             json.has("video_offer") -> {
-                                val json = json.getJSONObject("video_offer")
-                                message.data.putString("type", "video_offer")
-                                message.data.putString("nonce", json.getString("nonce"))
-                                message.data.putString("rtp_address", json.getString("rtp_address"))
+                                val offer = json.getJSONObject("video_offer")
+                                stopVideo()
+                                holePuncher.start(
+                                    parseSocketAddress(offer.getString("rtp_address")!!),
+                                    offer.getString("nonce")!!
+                                )
                             }
                             json.has("video_streaming") -> {
+                                holePuncher.stop()
                                 val command = json
                                     .getJSONObject("video_streaming")
                                     .getString("gstreamer_command")
-                                message.data.putString("type", "video_streaming")
-                                message.data.putString("gstreamer_command", command)
+                                this.videoError = playVideo("""
+                                    udpsrc port=${holePuncher.boundPort!!} !
+                                    ${command!!}
+                                """)
+                                updateUi()
                             }
                             json.has("queue_position") -> {
-                                val pos = json.getInt("queue_position")
-                                message.data.putString("type", "queue_position")
-                                message.data.putInt("queue_position", pos)
+                                this.queuePosition =  json.getInt("queue_position")
+                                updateUi()
+                            }
+                            json.has("sentry_state") -> {
+                                sentryState = json.getString("sentry_state")!!
+                                updateUi()
                             }
                             else -> {
-                                Log.w("Main", "Can't handle message $line")
+                                Log.w(logTag, "Can't handle message `$line`")
                                 continue@socket_loop
                             }
                         }
-
-                        handler.sendMessage(message)
                     } catch (e: Exception) {
-                        Log.w("Main", "Error reading JSON message: $line")
+                        Log.w(logTag, "Error reading JSON message `$line`")
                     }
                 }
-                message = createMessage()
-                message.data.putString("type", "disconnected")
-                handler.sendMessage(message)
-                Thread.sleep(100)
+                // Disconnected
+                Log.i(logTag, "Socket disconnected")
+                tx = null
+                this.connected = false
+                this.videoError = ""
+                socket = null
+                updateUi()
             }
         })
-        networkThread.start()
+        networkThread!!.start()
     }
 
-    override fun onPause() {
-        stopVideo()
-        isPausing = true
-        networkThread.join()
-        super.onPause()
+    private fun stopNetwork() {
+        Log.i(logTag, "Stopping network")
+        isStopped = true
+        socket?.close()
+        networkThread?.join()
+        networkThread = null
+    }
+
+    private fun sendCommand(command: String) {
+        Thread(Runnable { tx?.println("""{"command":"$command"}""") }).start()
+    }
+
+    private fun toggleMenu() {
+        runOnUiThread {
+            when (menu.visibility) {
+                VISIBLE -> {
+                    menu_button.setImageResource(R.drawable.ic_menu_white_24dp)
+                    menu.animate()
+                        .translationX(-menu.width.toFloat() + 1)
+                        .setDuration(200)
+                        .withEndAction {
+                            menu.visibility = View.INVISIBLE
+                            updateUi()
+                        }
+                        .start()
+                }
+                else -> {
+                    menu_button.setImageResource(R.drawable.ic_arrow_back_white_24dp)
+                    menu.visibility = View.VISIBLE
+                    updateUi()
+                    menu.animate()
+                        .translationX(0f)
+                        .setDuration(200)
+                        .start()
+                }
+            }
+
+        }
     }
 
     private fun updateUi() {
-        val msg = when {
-            !connected -> "Connecting..."
-            videoError != "" -> "Error playing stream: $videoError"
-            queuePosition > 0 -> "Someone else is already in control"
-            else -> null
-        }
-        when (msg) {
-            null -> {
-                message.text = ""
-                message.visibility = View.GONE
+        runOnUiThread {
+            val msg = when {
+                !connected -> "Connecting to ${serverAddress.hostString}:${serverAddress.port}..."
+                videoError != "" -> "Error playing stream: $videoError"
+                queuePosition > 0 -> "Someone else is already in control"
+                sentryState == "error" -> "Hardware error, restart Arduino"
+                sentryState == "homing" -> "Sentry is homing..."
+                sentryState == "homing_required" -> "Homing required"
+                sentryState == "busy" -> "Please wait..."
+                else -> null
             }
-            else -> {
-                message.text = msg
-                message.visibility = View.VISIBLE
+            when (msg) {
+                null -> {
+                    message.text = ""
+                    message.visibility = View.GONE
+                }
+                else -> {
+                    message.text = msg
+                    message.visibility = View.VISIBLE
+                }
             }
-        }
 
-        if (connected && queuePosition == 0) {
-            joystick.visibility = View.VISIBLE
-            joystick.isEnabled = true
-            fire_button.visibility = View.VISIBLE
-        } else {
-            joystick.visibility = View.GONE
-            joystick.isEnabled = false
-            fire_button.visibility = View.GONE
+            val isActiveClient = connected && queuePosition == 0
+
+            joystick.visibility = if (isActiveClient) VISIBLE else GONE
+            joystick.isEnabled = joystick.visibility == View.VISIBLE
+            fire_button.visibility = if (isActiveClient && menu.visibility != VISIBLE) VISIBLE else GONE
+            home_button.visibility = if (isActiveClient) VISIBLE else GONE
+            open_breach_button.visibility = if (isActiveClient) VISIBLE else GONE
+            close_breach_button.visibility = if (isActiveClient) VISIBLE else GONE
         }
     }
 
-    private fun parseSocketAddress(address: String): InetSocketAddress {
-        val uri = URI("my://$address")
-        if (uri.host == null || uri.port == -1) {
-            throw URISyntaxException(uri.toString(), "Address must contain a host and port")
+    private fun vibrateButtonPress() {
+        val ms = 50L
+        if (Build.VERSION.SDK_INT < 26) {
+            vibrator.vibrate(ms)
+        } else {
+            vibrator.vibrate(VibrationEffect.createOneShot(ms, 255))
         }
-
-        return InetSocketAddress(uri.host, uri.port)
     }
 }

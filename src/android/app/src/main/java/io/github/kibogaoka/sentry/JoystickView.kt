@@ -18,14 +18,6 @@ class JoystickView : View {
 
     var buttonDiameter = 60f
 
-    var borderWidth = 2f
-        set(value) {
-            field = value
-            _zonePaint.strokeWidth = value
-            _buttonPaint.strokeWidth = value
-            _borderPaint.strokeWidth = value
-        }
-
     var zoneColor = Color.parseColor("#FFFFFF")
         set(value) {
             field = value
@@ -36,12 +28,6 @@ class JoystickView : View {
         set(value) {
             field = value
             _buttonPaint.color = value
-        }
-
-    var borderColor = Color.parseColor("#000000")
-        set(value) {
-            field = value
-            _borderPaint.color = value
         }
 
     var interval: Long = 0
@@ -68,7 +54,6 @@ class JoystickView : View {
     private var _rawLocation = PointF()
     private var _animatedSize = 0f
     private var _zonePaint = Paint()
-    private var _borderPaint = Paint()
     private var _buttonPaint = Paint()
     private var _timer: Timer? = null
     private var _listener: ((PointF) -> Unit)? = null
@@ -108,22 +93,13 @@ class JoystickView : View {
             R.styleable.JoystickView_button_diameter,
             TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, buttonDiameter, metrics)
         )
-        borderWidth = ta.getDimension(
-            R.styleable.JoystickView_border_width,
-            TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, borderWidth, metrics)
-        )
 
         zoneColor = ta.getColor(R.styleable.JoystickView_zone_color, zoneColor)
-        borderColor = ta.getColor(R.styleable.JoystickView_border_color, borderColor)
         buttonColor = ta.getColor(R.styleable.JoystickView_button_color, buttonColor)
 
         interval = ta.getInt(R.styleable.JoystickView_interval, interval.toInt()).toLong()
 
-        _zonePaint.style = Paint.Style.STROKE
-        _borderPaint.style = Paint.Style.STROKE
-
         _zonePaint.flags = Paint.ANTI_ALIAS_FLAG
-        _borderPaint.flags = Paint.ANTI_ALIAS_FLAG
         _buttonPaint.flags = Paint.ANTI_ALIAS_FLAG
 
         ta.recycle()
@@ -131,15 +107,12 @@ class JoystickView : View {
 
     override fun onDraw(canvas: Canvas) {
         if (_animatedSize > 0) {
-            // Draw outer ring
+            // Draw zone
             canvas.drawCircle(_origin.x, _origin.y, _animatedSize / 2, _zonePaint)
-            canvas.drawCircle(_origin.x, _origin.y, _animatedSize / 2 + borderWidth, _borderPaint)
-            canvas.drawCircle(_origin.x, _origin.y, _animatedSize / 2 - borderWidth, _borderPaint)
         }
         if (_pressed) {
             // Draw button
             canvas.drawCircle(_rawLocation.x + _origin.x, _rawLocation.y + _origin.y, buttonDiameter / 2, _buttonPaint)
-            canvas.drawCircle(_rawLocation.x + _origin.x, _rawLocation.y + _origin.y, buttonDiameter / 2, _borderPaint)
         }
     }
 

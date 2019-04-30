@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <android.support.constraint.ConstraintLayout
+        android:id="@+id/container"
         xmlns:android="http://schemas.android.com/apk/res/android"
         xmlns:app="http://schemas.android.com/apk/res-auto"
         xmlns:tools="http://schemas.android.com/tools"
@@ -19,34 +20,131 @@
             android:layout_width="0dp"
             app:layout_constraintWidth_percent="0.5"
             app:layout_constraintRight_toRightOf="parent"
-            app:zone_color="#ffffff"
-            app:button_color="#ffffff"
-            app:border_color="#000000"
+            app:zone_color="#60aaaaaa"
+            app:button_color="#ccffffff"
             app:border_width="2dp"
             app:button_diameter="60dp"
             app:zone_diameter="250dp"/>
 
-    <Button
+    <View
+            android:id="@+id/reticle"
+            android:background="@drawable/reticle"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintBottom_toBottomOf="parent"/>
+
+    <ImageButton
             android:id="@+id/fire_button"
-            android:background="@drawable/fire_button"
+            android:background="?android:attr/selectableItemBackground"
+            android:src="@drawable/fire_button"
             android:layout_margin="12dp"
+            android:scaleType="fitCenter"
             android:layout_width="60dp"
             android:layout_height="60dp"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"/>
 
-    <TextView
-            android:id="@+id/message"
-            android:layout_width="match_parent"
+    <FrameLayout
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            app:layout_constraintTop_toTopOf="parent"
-            android:background="#88000000"
-            android:elevation="5dp"
-            android:textAlignment="center"
-            android:textColor="#ffffff"
-            android:visibility="gone"
-            android:padding="5dp"
-            android:textSize="10pt"/>
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
+        <TextView
+                android:id="@+id/message"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/message_background"
+                android:textAlignment="center"
+                android:textColor="#ffffff"
+                android:visibility="gone"
+                android:layout_marginTop="8dp"
+                android:layout_marginStart="64dp"
+                android:layout_marginEnd="64dp"
+                android:padding="12dp"
+                android:textSize="16sp"/>
+    </FrameLayout>
+
+    <LinearLayout
+            android:id="@+id/menu"
+            android:visibility="invisible"
+            android:translationX="-219sp"
+            android:layout_width="220sp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#aa000000"
+            android:gravity="top"
+            android:paddingTop="64dp"
+            app:layout_constraintLeft_toLeftOf="parent">
+
+        <Button
+                android:id="@+id/set_server_address_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="Set Server Address"
+                android:textColor="#ffffff"
+                android:gravity="center_vertical"
+                android:textSize="16sp"/>
+
+        <Button
+                android:id="@+id/close_breach_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:textColor="#ffffff"
+                android:gravity="center_vertical"
+                android:textSize="16sp"/>
+
+        <Button
+                android:id="@+id/home_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="Home"
+                android:textColor="#ffffff"
+                android:gravity="center_vertical"
+                android:textSize="16sp"/>
+
+        <Button
+                android:id="@+id/open_breach_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="Open Breach"
+                android:textColor="#ffffff"
+                android:gravity="center_vertical"
+                android:textSize="16sp"/>
+
+        <Button
+                android:id="@+id/close_breach_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="Close Breach"
+                android:textColor="#ffffff"
+                android:gravity="center_vertical"
+                android:textSize="16sp"/>
+    </LinearLayout>
+
+    <ImageButton
+            android:id="@+id/menu_button"
+            android:background="?android:attr/selectableItemBackground"
+            android:src="@drawable/ic_menu_white_24dp"
+            android:padding="16dp"
+            android:scaleType="fitCenter"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintTop_toTopOf="parent"/>
 
 </android.support.constraint.ConstraintLayout>
