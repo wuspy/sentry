@@ -6,7 +6,6 @@ use gstreamer_video::prelude::*;
 use std::net::SocketAddr;
 use std::thread;
 use std::thread::JoinHandle;
-use std::sync::{Arc, Mutex};
 
 // These are needed for the compiler to statically link the needed plugins into this library
 #[link(name="gstcoreelements")]
@@ -15,6 +14,8 @@ extern "C" { fn gst_plugin_coreelements_register(); }
 extern "C" { fn gst_plugin_videotestsrc_register(); }
 #[link(name="gstvideoconvert")]
 extern "C" { fn gst_plugin_videoconvert_register(); }
+#[link(name="gstaudioconvert")]
+extern "C" { fn gst_plugin_audioconvert_register(); }
 #[link(name="gstvideorate")]
 extern "C" { fn gst_plugin_videorate_register(); }
 #[link(name="gstvideoscale")]
@@ -23,6 +24,8 @@ extern "C" { fn gst_plugin_videoscale_register(); }
 extern "C" { fn gst_plugin_udp_register(); }
 #[link(name="gstrtp")]
 extern "C" { fn gst_plugin_rtp_register(); }
+#[link(name="gstrtpmanager")]
+extern "C" { fn gst_plugin_rtpmanager_register(); }
 #[link(name="gstandroidmedia")]
 extern "C" { fn gst_plugin_androidmedia_register(); }
 #[link(name="gstjpeg")]
@@ -31,6 +34,10 @@ extern "C" { fn gst_plugin_jpeg_register(); }
 extern "C" { fn gst_plugin_libav_register(); }
 #[link(name="gstplayback")]
 extern "C" { fn gst_plugin_playback_register(); }
+#[link(name="gstmpegtsdemux")]
+extern "C" { fn gst_plugin_mpegtsdemux_register(); }
+#[link(name="gstaudioparsers")]
+extern "C" { fn gst_plugin_audioparsers_register(); }
 #[link(name="gstopengl")]
 extern "C" { fn gst_plugin_opengl_register(); }
 
@@ -39,14 +46,18 @@ fn register_gstreamer_plugins() {
         gst_plugin_coreelements_register();
         gst_plugin_videotestsrc_register();
         gst_plugin_videoconvert_register();
+        gst_plugin_audioconvert_register();
         gst_plugin_videorate_register();
         gst_plugin_videoscale_register();
         gst_plugin_udp_register();
         gst_plugin_rtp_register();
+        gst_plugin_rtpmanager_register();
         gst_plugin_androidmedia_register();
         gst_plugin_jpeg_register();
         gst_plugin_libav_register();
         gst_plugin_playback_register();
+        gst_plugin_mpegtsdemux_register();
+        gst_plugin_audioparsers_register();
         gst_plugin_opengl_register();
     }
 }
@@ -135,23 +146,7 @@ impl Video {
         Ok(())
     }
 
-//    fn start_in_thread(
-//        self_pipeline: Arc<Mutex<Option<gst::Pipeline>>>,
-//        command: String,
-//        native_surface: usize,
-//    ) -> Result<(), String> {
-//        let context = glib::MainContext::new();
-//        context.push_thread_default();
-//
-//        context.pop_thread_default();
-//        Ok(())
-//    }
-
     pub fn get_command(&self) -> Option<String> {
         self.command.as_ref().map(|command| command.to_owned())
     }
-
-//    pub fn get_error(&self) -> Option<String> {
-//        self.error.lock().unwrap().as_ref().map(|error| error.to_owned())
-//    }
 }
