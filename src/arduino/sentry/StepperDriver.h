@@ -37,6 +37,9 @@ public:
     float getSpeed() { return _speed; }
     Direction getDirection() { return _direction; }
 
+    void setInvertDir(bool invertDir);
+    bool getInvertDir() { return _invertDir; }
+
     void setRecalculationInterval(uint64_t interval) { _calculationInterval = interval; }
     uint32_t getRecalculationInterval();
 

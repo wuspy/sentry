@@ -18,8 +18,6 @@ const uint8_t SLIDE_ENABLE_PIN      = 24;
 const uint8_t PITCH_ENDSTOP_PIN     = 3;
 const uint8_t YAW_ENDSTOP_PIN       = 14;
 
-const uint8_t LED_PIN               = 13;
-
 } // namespace Sentry
 
 #endif // SENTRY_PINS_H

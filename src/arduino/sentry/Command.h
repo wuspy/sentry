@@ -4,13 +4,15 @@
 namespace Sentry {
 
 typedef enum : uint8_t {
-    COMMAND_NONE = 0,
+    COMMAND_MOVE = 200,
     COMMAND_HOME,
     COMMAND_OPEN_BREACH,
     COMMAND_CLOSE_BREACH,
     COMMAND_CYCLE_BREACH,
     COMMAND_FIRE,
     COMMAND_FIRE_AND_CYCLE_BREACH,
+    COMMAND_MOTORS_ON,
+    COMMAND_MOTORS_OFF,
 } Command;
 
 } // namespace Sentry

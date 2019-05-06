@@ -107,6 +107,7 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
     let pipeline = gst::Pipeline::new("pipeline");
+    info!("Creating bin \"{}\"", config.video.encoder);
     let bin = gst::parse_bin_from_description(config.video.encoder.as_str(), true)
         .map_err(|err| format!("Could not parse GStreamer encoder: {}", err))?;
     let tee = gst::ElementFactory::find("tee")

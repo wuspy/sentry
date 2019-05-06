@@ -3,17 +3,18 @@
 #include "motion.h"
 #include "pins.h"
 #include "Command.h"
+#include "Status.h"
 #include "StepperDriver.h"
 
 using namespace Sentry;
 
-StepperDriver pitch(PITCH_STEP_PIN, PITCH_DIR_PIN, PITCH_ENABLE_PIN);
-StepperDriver yaw(YAW_STEP_PIN, YAW_DIR_PIN, YAW_ENABLE_PIN);
-StepperDriver slide(SLIDE_STEP_PIN, SLIDE_DIR_PIN, SLIDE_ENABLE_PIN);
+StepperDriver pitch(PITCH_STEP_PIN, PITCH_DIR_PIN, PITCH_ENABLE_PIN, PITCH_INVERTED);
+StepperDriver yaw(YAW_STEP_PIN, YAW_DIR_PIN, YAW_ENABLE_PIN, YAW_INVERTED);
+StepperDriver slide(SLIDE_STEP_PIN, SLIDE_DIR_PIN, SLIDE_ENABLE_PIN, SLIDE_INVERTED);
 
-const uint32_t BUFFER_LENGTH = 128;
+const uint32_t BUFFER_LENGTH = 512;
 const uint32_t RX_MESSAGE_LENGTH = 11;
-const uint32_t TX_MESSAGE_LENGTH = 10;
+const uint32_t TX_MESSAGE_LENGTH = 11;
 char *buffer = new char[BUFFER_LENGTH];
 uint32_t bytesPending = 0;
 
@@ -26,6 +27,9 @@ uint64_t lastMessageTime = 0;
 
 volatile uint8_t *ledRegister;
 uint8_t ledBitmask;
+
+Status status = STATUS_HOMING_REQUIRED;
+bool loaded = false;
 
 inline void ledOn()
 {
@@ -50,52 +54,79 @@ bool isEndstopHit(uint8_t pin)
 
 void home()
 {
-    pitch.move(PITCH_MAX_STEPS * (PITCH_HOME_INVERTED ? -2 : 2));
-    yaw.move(YAW_MAX_STEPS * (YAW_HOME_INVERTED ? -2 : 2));
+    pitch.setEnabled(true);
+    yaw.setEnabled(true);
 
+    // Stop motors
+    pitch.moveTo(0);
+    yaw.moveTo(0);
+    pitch.setPosition(0);
+    yaw.setPosition(0);
+    while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
+        poll();
+    }
+
+    // Move until endstops trigger
+    pitch.moveTo(PITCH_MAX_STEPS * (PITCH_HOME_INVERTED ? 2 : -2));
+    yaw.moveTo(YAW_MAX_STEPS * (YAW_HOME_INVERTED ? -2 : 2));
     while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
         if (isEndstopHit(PITCH_ENDSTOP_PIN)) {
             pitch.setPosition(0);
             pitch.emergencyStop();
         }
         if (isEndstopHit(YAW_ENDSTOP_PIN)) {
-            pitch.setPosition(0);
-            pitch.emergencyStop();
+            yaw.setPosition(0);
+            yaw.emergencyStop();
         }
-        pitch.poll();
-        yaw.poll();
+        poll();
     }
 
+    // Move axes to 0 degrees
     pitch.moveTo(PITCH_HOME_OFFSET);
     yaw.moveTo(YAW_HOME_OFFSET);
-
     while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
-        pitch.poll();
-        yaw.poll();
+        poll();
     }
+    pitch.setPosition(PITCH_HOME_INVERTED ? PITCH_MAX_STEPS : 0);
+    pitch.moveTo(pitch.getPosition());
+    yaw.setPosition(YAW_HOME_INVERTED ? YAW_MAX_STEPS : 0);
+    yaw.moveTo(yaw.getPosition());
 }
 
-void moveSlideToMM(float mm)
+void openBreach(bool disable)
 {
-    slide.moveTo(mm * SLIDE_STEPS_PER_MM);
-    slide.wait();
-}
-
-void openBreach()
-{
-    moveSlideToMM(20);
+    if (!loaded && status != STATUS_MOTORS_OFF) {
+        slide.setEnabled(true);
+        slide.moveTo(3.3 * SLIDE_STEPS_PER_REV);
+        slide.wait();
+        if (disable) {
+            slide.setEnabled(false);
+        }
+    }
 }
 
 void closeBreach()
 {
-    moveSlideToMM(2);
+    if (!loaded && status != STATUS_MOTORS_OFF) {
+        slide.setEnabled(true);
+        slide.moveTo(0.6 * SLIDE_STEPS_PER_REV);
+        slide.wait();
+        slide.setEnabled(false);
+        loaded = true;
+    }
 }
 
-void fire()
+void fire(bool disable)
 {
-    moveSlideToMM(-2); // Overshoot to ensure the release is triggered
-    slide.setPosition(0);
-    slide.moveTo(0);
+    if (loaded && status != STATUS_MOTORS_OFF) {
+        slide.setEnabled(true);
+        slide.moveTo(0);
+        slide.wait();
+        if (disable) {
+            slide.setEnabled(false);
+        }
+        loaded = false;
+    }
 }
 
 uint64_t timeDiff(uint64_t current, uint64_t previous)
@@ -105,84 +136,128 @@ uint64_t timeDiff(uint64_t current, uint64_t previous)
 
 void setup()
 {
-    ledBitmask = digitalPinToBitMask(LED_PIN);
-    ledRegister = portOutputRegister(digitalPinToPort(LED_PIN));
+    ledBitmask = digitalPinToBitMask(LED_BUILTIN);
+    ledRegister = portOutputRegister(digitalPinToPort(LED_BUILTIN));
 
     pinMode(PITCH_ENDSTOP_PIN, INPUT_PULLUP);
     pinMode(YAW_ENDSTOP_PIN, INPUT_PULLUP);
+    pinMode(2, INPUT_PULLUP);
+    pinMode(15, INPUT_PULLUP);
+    pinMode(19, INPUT_PULLUP); 
 
     pitch.setMaxSpeed(0);
     pitch.setAcceleration(20000);
+    pitch.setEnabled(false);
 
     yaw.setMaxSpeed(0);
     yaw.setAcceleration(15000);
+    yaw.setEnabled(false);
 
-    slide.setMaxSpeed(1000);
-    slide.setAcceleration(10000);
+    slide.setEnabled(false);
+    slide.setAcceleration(40000);
+    slide.setMaxSpeed(2200);
 
+    ledOn();
     Serial.begin(115200);
     while (!Serial);
+    ledOff();
 }
 
 void loop()
 {
     uint64_t timestamp = micros();
 
+    if (digitalRead(2) == LOW) {
+        fire(false);
+        openBreach(false);
+        closeBreach();
+    }
+    if (digitalRead(19) == LOW) {
+        openBreach(true);
+    }
+    if (digitalRead(15) == LOW) {
+        closeBreach();
+    }
+
     // Read commands from serial
     while (Serial.available()) {
-        bytesPending += Serial.readBytes(buffer + bytesPending, 1);
-        poll();
+        uint8_t nextByte = Serial.read();
+        if (nextByte == -1) {
+            continue;
+        }
+        buffer[bytesPending] = static_cast<uint8_t>(nextByte);
+        bytesPending++;
         if (bytesPending >= RX_MESSAGE_LENGTH) {
             // A complete message has been read into the buffer
             if (crc16(&buffer[2], RX_MESSAGE_LENGTH - 2) == deserialize<uint16_t>(&buffer[0])) {
                 // Message is valid
-                ledOn(); // Turn on LED to indicate a valid message was receive
+                digitalWrite(LED_BUILTIN, HIGH); // Turn on LED to indicate a valid message was received
                 uint8_t command = deserialize<uint8_t>(&buffer[2]);
-                int32_t pitchSpeed = deserialize<int32_t>(&buffer[3]);
-                int32_t yawSpeed = deserialize<int32_t>(&buffer[7]);
-
                 lastMessageTime = timestamp;
-                bytesPending -= RX_MESSAGE_LENGTH;
-                if (bytesPending > 0) {
-                    memmove(buffer, buffer + RX_MESSAGE_LENGTH, BUFFER_LENGTH - bytesPending);
-                }
-                pitch.setMaxSpeed(static_cast<float>(abs(pitchSpeed)));
-                pitch.moveTo(pitchSpeed >= 0 ? PITCH_MAX_STEPS : 0);
-                yaw.setMaxSpeed(static_cast<float>(abs(yawSpeed)));
-                yaw.moveTo(yawSpeed >= 0 ? YAW_MAX_STEPS : 0);
-
-                poll();
-
+                bytesPending = 0;
+                
                 switch (command) {
+                    case COMMAND_MOVE:
+                        if (status == STATUS_READY) {
+                            int32_t pitchSpeed = deserialize<int32_t>(&buffer[3]);
+                            int32_t yawSpeed = deserialize<int32_t>(&buffer[7]);
+                            pitch.setMaxSpeed(static_cast<float>(abs(pitchSpeed)));
+                            pitch.moveTo(pitchSpeed >= 0 ? PITCH_MAX_STEPS : 0);
+                            yaw.setMaxSpeed(static_cast<float>(abs(yawSpeed)));
+                            yaw.moveTo(yawSpeed >= 0 ? YAW_MAX_STEPS : 0);
+                        }
+                        break;
                     case COMMAND_HOME:
-                        home();
+                        if (status != STATUS_MOTORS_OFF && status != STATUS_ERROR) {
+                            uint32_t pitchSpeed = deserialize<uint32_t>(&buffer[3]);
+                            uint32_t yawSpeed = deserialize<uint32_t>(&buffer[7]);
+                            pitch.setMaxSpeed(static_cast<float>(pitchSpeed));
+                            yaw.setMaxSpeed(static_cast<float>(yawSpeed));
+                            status = STATUS_HOMING;
+                            sendMessage();
+                            home();
+                            status = STATUS_READY;
+                        }
                         break;
                     case COMMAND_OPEN_BREACH:
-                        openBreach();
+                        openBreach(true);
                         break;
                     case COMMAND_CLOSE_BREACH:
                         closeBreach();
                         break;
                     case COMMAND_CYCLE_BREACH:
-                        openBreach();
+                        openBreach(false);
                         closeBreach();
                         break;
                     case COMMAND_FIRE:
-                        fire();
+                        fire(true);
                         break;
                     case COMMAND_FIRE_AND_CYCLE_BREACH:
-                        fire();
-                        openBreach();
+                        fire(false);
+                        openBreach(false);
                         closeBreach();
                         break;
-                    case COMMAND_NONE:
+                    case COMMAND_MOTORS_ON:
+                        if (status == STATUS_MOTORS_OFF) {
+                            pitch.setEnabled(true);
+                            yaw.setEnabled(true);
+                            status = STATUS_HOMING_REQUIRED;
+                        }
+                        break;
+                    case COMMAND_MOTORS_OFF:
+                        pitch.setEnabled(false);
+                        yaw.setEnabled(false);
+                        pitch.emergencyStop();
+                        yaw.emergencyStop();
+                        status = STATUS_MOTORS_OFF;
+                        break;
                     default:
                         break;
                 }
             } else {
                 // CRC failed, skip one byte
-                memmove(buffer, buffer + 1, --bytesPending);
-                poll();
+                --bytesPending;
+                memmove(&buffer[0], &buffer[1], bytesPending);
             }
         }
     }
@@ -191,21 +266,27 @@ void loop()
         // Haven't received a message 0.5 seconds
         pitch.setMaxSpeed(0);
         yaw.setMaxSpeed(0);
-        ledOff();
+        digitalWrite(LED_BUILTIN, LOW);
     }
     
     if (timeDiff(timestamp, lastResponseTime) >= RESPONSE_INTERVAL) {
-        // Write current position to serial
-        
-        serialize(&buffer[2], static_cast<uint32_t>(pitch.getPosition() > 0 ? pitch.getPosition() : 0));
-        serialize(&buffer[6], static_cast<uint32_t>(yaw.getPosition() > 0 ? yaw.getPosition() : 0));
-        serialize(&buffer[0], crc16(&buffer[2], TX_MESSAGE_LENGTH - 2));
-        
-        for (int i = 0; i < TX_MESSAGE_LENGTH; ++i) {
-            poll();
-            Serial.write(buffer[i]);
-        }
+        sendMessage();
         lastResponseTime = timestamp;
     }
     poll();
+}
+
+void sendMessage() {    
+    // Write status
+    serialize(&buffer[2], static_cast<uint8_t>(status));
+    // Write current position
+    serialize(&buffer[3], static_cast<uint32_t>(pitch.getPosition() > 0 ? pitch.getPosition() : 0));
+    serialize(&buffer[7], static_cast<uint32_t>(yaw.getPosition() > 0 ? yaw.getPosition() : 0));
+    // Write CRC
+    serialize(&buffer[0], crc16(&buffer[2], TX_MESSAGE_LENGTH - 2));
+    
+    for (int i = 0; i < TX_MESSAGE_LENGTH; ++i) {
+        poll();
+        Serial.write(buffer[i]);
+    }
 }

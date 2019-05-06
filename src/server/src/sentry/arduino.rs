@@ -5,7 +5,7 @@ use byteorder::{BigEndian, LittleEndian, ByteOrder};
 use tokio::codec::{Decoder, Encoder};
 use tokio::reactor::Handle;
 use bytes::{BytesMut, BufMut};
-use tokio_serial::{Serial, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
+use tokio_serial::{Serial, SerialPort, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
 use futures::{Stream, Sink};
 use tokio::prelude::*;
 use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource, StartResult, UnboundedChannel};
@@ -30,14 +30,20 @@ impl Decoder for ArduinoCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.len() >= 10 {
-            let (our_crc, their_crc) = (BigEndian::read_u16(src), crc16(&src[2..10]));
+        if src.len() >= 11 {
+            let (our_crc, their_crc) = (BigEndian::read_u16(src), crc16(&src[2..11]));
             if our_crc == their_crc {
-                let message = src.split_to(10);
+                let message = src.split_to(11);
                 Ok(Some(MessageContent::HardwareState {
-                    status: HardwareStatus::Ready,
-                    pitch_pos: BigEndian::read_u32(&message[2..]),
-                    yaw_pos: BigEndian::read_u32(&message[6..]),
+                    status: match message[2] {
+                        100 => HardwareStatus::Ready,
+                        101 => HardwareStatus::HomingRequired,
+                        102 => HardwareStatus::Homing,
+                        103 => HardwareStatus::MotorsOff,
+                        _ => HardwareStatus::Error,
+                    },
+                    pitch_pos: BigEndian::read_u32(&message[3..]),
+                    yaw_pos: BigEndian::read_u32(&message[7..]),
                 }))
             } else {
                 warn!("Arduino CRC mismatch: {:#X}/{:#X}", our_crc, their_crc);
@@ -58,22 +64,27 @@ impl Encoder for ArduinoCodec {
         dst.reserve(11);
         let mut message: [u8; 11] = [0; 11];
         message[2] = match item {
-            Command::Fire                   => 1,
-            Command::OpenBreach             => 2,
-            Command::CloseBreach            => 3,
-            Command::CycleBreach            => 4,
-            Command::FireAndCycleBreach     => 5,
-            Command::Home                   => 6,
-            _ => 0,
+            Command::Move {..}              => 200,
+            Command::Home                   => 201,
+            Command::OpenBreach             => 202,
+            Command::CloseBreach            => 203,
+            Command::CycleBreach            => 204,
+            Command::Fire                   => 205,
+            Command::FireAndCycleBreach     => 206,
+            Command::MotorsOn               => 207,
+            Command::MotorsOff              => 208,
         };
-        BigEndian::write_i32(&mut message[3..], match item {
-            Command::Move {pitch, ..} =>  (pitch * self.config.arduino.max_pitch_speed as f64) as i32,
-            _ => 0,
-        });
-        BigEndian::write_i32(&mut message[7..], match item {
-            Command::Move {yaw, ..} =>  (yaw * self.config.arduino.max_yaw_speed as f64) as i32,
-            _ => 0,
-        });
+        match item {
+            Command::Move { pitch, yaw } => {
+                BigEndian::write_i32(&mut message[3..], (pitch * self.config.arduino.pitch_max_speed as f64) as i32);
+                BigEndian::write_i32(&mut message[7..], (yaw * self.config.arduino.yaw_max_speed as f64) as i32);
+            },
+            Command::Home => {
+                BigEndian::write_u32(&mut message[3..], self.config.arduino.pitch_homing_speed);
+                BigEndian::write_u32(&mut message[7..], self.config.arduino.yaw_homing_speed);
+            },
+            _ => {},
+        };
         let crc = crc16(&message[2..]);
         BigEndian::write_u16(&mut message[0..], crc);
         dst.put_slice(&message);
@@ -125,7 +136,7 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
                 }
             }
         })
-        .filter(move |message| {
+        .filter(move |command| {
             // TODO rate-limit the amount of commands we get to prevent straining the serial connection
             true
         })

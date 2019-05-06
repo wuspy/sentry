@@ -27,7 +27,6 @@ StepperDriver::StepperDriver(uint8_t stepPin, uint8_t dirPin, uint8_t enablePin,
     setRecalculationInterval(10000);
     setAcceleration(10);
     setDirection(DIRECTION_CW);
-    setEnabled(true);
 }
 
 void StepperDriver::setEnabled(bool enabled)
@@ -52,6 +51,11 @@ void StepperDriver::setPosition(int64_t position)
 void StepperDriver::setMaxSpeed(float speed)
 {
     _maxSpeed = abs(speed);
+}
+
+void StepperDriver::setInvertDir(bool invertDir)
+{
+    _invertDir = invertDir;
 }
 
 void StepperDriver::moveTo(int64_t position)
@@ -145,7 +149,7 @@ uint64_t StepperDriver::timeDiff(uint64_t current, uint64_t previous)
     return current >= previous ? current - previous : current + (UINT64_MAX - previous);
 }
 
-bool StepperDriver::toggleStep()
+inline bool StepperDriver::toggleStep()
 {
     if (*_stepRegister & _stepBitmask) {
         *_stepRegister &= ~_stepBitmask;

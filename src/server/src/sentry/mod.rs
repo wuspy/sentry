@@ -13,35 +13,38 @@ use std::net::SocketAddr;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum Command {
     Move {
         pitch: f64,
         yaw: f64,
     },
+    Home,
     Fire,
     OpenBreach,
     CloseBreach,
     CycleBreach,
     FireAndCycleBreach,
-    Home,
+    MotorsOn,
+    MotorsOff,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub enum HardwareStatus {
     Ready,
+    HomingRequired,
     Homing,
-    Firing,
+    MotorsOff,
     Error,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Client {
     pub address: SocketAddr,
     pub queue_position: usize,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub enum MessageSource {
     Arduino,
     WebsocketServer,
@@ -49,7 +52,7 @@ pub enum MessageSource {
     Client (Client),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub enum MessageContent {
     HardwareState {
         pitch_pos: u32,
@@ -69,7 +72,7 @@ pub enum MessageContent {
     ClientDisconnected (Client),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Message {
     pub content: MessageContent,
     pub source: MessageSource,

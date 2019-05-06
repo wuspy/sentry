@@ -65,12 +65,12 @@ fn run(runtime: Runtime) -> StartResult<()> {
     let reactor = runtime.reactor();
     let config = sentry::config::load()?;
     let (server_tx, server_rx) = sentry::server::start(config.clone())?;
-    //let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor)?;
+    let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor)?;
     let (video_tx, video_rx) = sentry::video::start(config.clone())?;
 
-    broadcast!(server_rx, vec![&video_tx]);
-    //broadcast!(arduino_rx, vec![&server_tx, &video_tx]);
-    broadcast!(video_rx, vec![&server_tx]);
+    broadcast!(server_rx, vec![&video_tx, &arduino_tx]);
+    broadcast!(arduino_rx, vec![&server_tx, &video_tx]);
+    broadcast!(video_rx, vec![&server_tx, &arduino_tx]);
 
     Ok(())
 }

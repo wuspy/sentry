@@ -7,8 +7,10 @@ use crate::sentry::StartResult;
 pub struct ArduinoConfig {
     pub device: String,
     pub baud: u32,
-    pub max_pitch_speed: u32,
-    pub max_yaw_speed: u32,
+    pub pitch_max_speed: u32,
+    pub yaw_max_speed: u32,
+    pub pitch_homing_speed: u32,
+    pub yaw_homing_speed: u32,
 }
 
 #[derive(Clone, Deserialize)]
