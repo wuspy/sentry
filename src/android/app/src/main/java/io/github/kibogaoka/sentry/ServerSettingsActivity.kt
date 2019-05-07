@@ -7,16 +7,14 @@ import android.os.Bundle
 import android.preference.PreferenceManager
 import android.text.Editable
 import android.text.TextWatcher
-import android.util.Log
-import android.view.WindowManager
 
-import kotlinx.android.synthetic.main.activity_settings.*
+import kotlinx.android.synthetic.main.activity_server_settings.*
 import java.lang.Exception
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URISyntaxException
 
-class SettingsActivity : Activity() {
+class ServerSettingsActivity : Activity() {
     companion object {
         val DEFAULT_SERVER_ADDRESS = InetSocketAddress("10.42.0.1", 8080)
     }
@@ -26,7 +24,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(null)
-        setContentView(R.layout.activity_settings)
+        setContentView(R.layout.activity_server_settings)
 
         preferences = PreferenceManager.getDefaultSharedPreferences(this)
         serverAddress = try {

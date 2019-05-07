@@ -1,16 +1,17 @@
 <resources>
-
-    <style name="MainTheme">
+    <style name="AppTheme">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
-        <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
+        <item name="android:textColor">@color/foreground</item>
+        <item name="android:textSize">16sp</item>
     </style>
 
-    <style name="SettingsTheme">
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowActionBar">false</item>
-        <item name="android:windowContentOverlay">@null</item>
+    <style name="MainTheme" parent="AppTheme">
+        <item name="android:windowFullscreen">true</item>
+    </style>
+
+    <style name="SettingsTheme" parent="AppTheme">
     </style>
 
 </resources>

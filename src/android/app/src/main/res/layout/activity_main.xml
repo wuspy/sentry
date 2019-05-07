@@ -29,8 +29,8 @@
     <View
             android:id="@+id/reticle"
             android:background="@drawable/reticle"
-            android:layout_width="8dp"
-            android:layout_height="8dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             app:layout_constraintLeft_toLeftOf="parent"
             app:layout_constraintRight_toRightOf="parent"
             app:layout_constraintTop_toTopOf="parent"
@@ -48,6 +48,106 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"/>
 
+    <LinearLayout
+            android:id="@+id/settings_container"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="invisible"
+            android:orientation="vertical"
+            android:gravity="end"
+            android:padding="8dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintRight_toRightOf="parent">
+        <FrameLayout
+                android:background="@drawable/frame"
+                android:paddingStart="12dp"
+                android:paddingEnd="16dp"
+                android:scaleType="fitCenter"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp">
+            <CheckBox
+                    android:id="@+id/reload_after_firing_checkbox"
+                    android:buttonTint="@color/foreground"
+                    android:layout_gravity="center_vertical"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/foreground"
+                    android:text="Reload after firing"/>
+        </FrameLayout>
+
+        <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+            <FrameLayout
+                    android:background="@drawable/frame"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="16dp"
+                    android:scaleType="fitCenter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginRight="8dp">
+                <CheckBox
+                        android:id="@+id/invert_x_checkbox"
+                        android:buttonTint="@color/foreground"
+                        android:layout_gravity="center_vertical"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/foreground"
+                        android:text="Invert X-axis"/>
+            </FrameLayout>
+
+            <FrameLayout
+                    android:background="@drawable/frame"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="16dp"
+                    android:scaleType="fitCenter"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp">
+                <CheckBox
+                        android:id="@+id/invert_y_checkbox"
+                        android:buttonTint="@color/foreground"
+                        android:layout_gravity="center_vertical"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/foreground"
+                        android:text="Invert Y-axis"/>
+            </FrameLayout>
+        </LinearLayout>
+
+        <LinearLayout
+                android:background="@drawable/frame"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:scaleType="fitCenter"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+            <TextView
+                    android:layout_gravity="center_vertical"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Sensitivity"/>
+            <SeekBar
+                    android:id="@+id/sensitivity_slider"
+                    android:progressTint="@color/foreground"
+                    android:thumbTint="@color/foreground"
+                    android:layout_gravity="center_vertical"
+                    android:layout_width="200dp"
+                    android:layout_height="wrap_content"/>
+            <TextView
+                    android:id="@+id/sensitivity_value"
+                    android:layout_gravity="center_vertical"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:width="40sp"
+                    android:text="100%"/>
+        </LinearLayout>
+    </LinearLayout>
+
     <FrameLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -58,15 +158,13 @@
                 android:id="@+id/message"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/message_background"
+                android:background="@drawable/frame"
                 android:textAlignment="center"
-                android:textColor="#ffffff"
                 android:visibility="gone"
                 android:layout_marginTop="8dp"
                 android:layout_marginStart="64dp"
                 android:layout_marginEnd="64dp"
-                android:padding="12dp"
-                android:textSize="16sp"/>
+                android:padding="12dp"/>
     </FrameLayout>
 
     <LinearLayout
@@ -88,19 +186,7 @@
                 android:paddingStart="16dp"
                 android:background="?android:attr/selectableItemBackground"
                 android:text="Set Server Address"
-                android:textColor="#ffffff"
-                android:gravity="center_vertical"
-                android:textSize="16sp"/>
-
-        <Button
-                android:id="@+id/close_breach_button"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:paddingStart="16dp"
-                android:background="?android:attr/selectableItemBackground"
-                android:textColor="#ffffff"
-                android:gravity="center_vertical"
-                android:textSize="16sp"/>
+                android:gravity="center_vertical"/>
 
         <Button
                 android:id="@+id/home_button"
@@ -109,31 +195,34 @@
                 android:paddingStart="16dp"
                 android:background="?android:attr/selectableItemBackground"
                 android:text="Home"
-                android:textColor="#ffffff"
-                android:gravity="center_vertical"
-                android:textSize="16sp"/>
+                android:gravity="center_vertical"/>
 
         <Button
-                android:id="@+id/open_breach_button"
+                android:id="@+id/reload_button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:paddingStart="16dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="Reload"
+                android:gravity="center_vertical"/>
+
+        <Button
+                android:id="@+id/breach_button"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:paddingStart="16dp"
                 android:background="?android:attr/selectableItemBackground"
                 android:text="Open Breach"
-                android:textColor="#ffffff"
-                android:gravity="center_vertical"
-                android:textSize="16sp"/>
+                android:gravity="center_vertical"/>
 
         <Button
-                android:id="@+id/close_breach_button"
+                android:id="@+id/motors_button"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:paddingStart="16dp"
                 android:background="?android:attr/selectableItemBackground"
-                android:text="Close Breach"
-                android:textColor="#ffffff"
-                android:gravity="center_vertical"
-                android:textSize="16sp"/>
+                android:text="Turn Motors On"
+                android:gravity="center_vertical"/>
     </LinearLayout>
 
     <ImageButton

@@ -11,13 +11,14 @@ import org.json.JSONObject
 import java.io.*
 import java.lang.Exception
 import java.net.*
-import android.content.Context.VIBRATOR_SERVICE
 import android.content.Intent
 import android.content.SharedPreferences
-import android.opengl.Visibility
 import android.os.*
 import android.preference.PreferenceManager
 import android.view.View.*
+import android.widget.CompoundButton
+import android.widget.SeekBar
+import java.lang.IllegalArgumentException
 
 class MainActivity : Activity() {
 
@@ -44,9 +45,16 @@ class MainActivity : Activity() {
     private var connected = false
     private var queuePosition = 0
     private var videoError = ""
-    private var sentryState = "ready"
+    private var sentryState = SentryState.MOTORS_OFF
+    private var pitchPosition = 0
+    private var yawPosition = 0
     private lateinit var serverAddress: InetSocketAddress
+    private var sensitivity = 100
+    private var reloadAfterFiring = false
+    private var invertY = false
+    private var invertX = false
     private lateinit var preferences: SharedPreferences
+    private lateinit var placeholderVideoCommand: String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,11 +68,21 @@ class MainActivity : Activity() {
 
         vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         preferences = PreferenceManager.getDefaultSharedPreferences(this)
+        sensitivity = preferences.getInt("sensitivity", 100)
+        reloadAfterFiring = preferences.getBoolean("reload_after_firing", true)
+        invertY = preferences.getBoolean("invert_y", false)
+        invertX = preferences.getBoolean("invert_x", false)
         serverAddress = try {
             parseSocketAddress(preferences.getString("server_host", "")!!)
         } catch (e: Exception) {
-            SettingsActivity.DEFAULT_SERVER_ADDRESS
+            ServerSettingsActivity.DEFAULT_SERVER_ADDRESS
         }
+
+        sensitivity_slider.progress = sensitivity
+        sensitivity_value.text = "$sensitivity%"
+        invert_y_checkbox.isChecked = invertY
+        invert_x_checkbox.isChecked = invertX
+        reload_after_firing_checkbox.isChecked = reloadAfterFiring
 
         video_surface.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) { }
@@ -73,43 +91,75 @@ class MainActivity : Activity() {
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                 Log.i(logTag, "Video surface changed")
                 setVideoSurface(holder.surface)
+                val ppi = resources.displayMetrics.density
+                val videoWidth = (width / ppi).toInt()
+                val videoHeight = (height / ppi).toInt()
+                placeholderVideoCommand = "videotestsrc pattern=snow ! video/x-raw,width=$videoWidth,height=$videoHeight,framerate=24/1 ! glimagesink"
                 startNetwork()
             }
         })
 
         joystick.interval = 50 // ms
         joystick.setOnUpdateListener {
-            tx?.println(String.format("""{"pitch":%.3f,"yaw":%.3f}""", it.y, it.x))
+            tx?.println(String.format(
+                """{"pitch":%.3f,"yaw":%.3f}""",
+                it.y * (sensitivity / 100f) * if (invertY) -1 else 1,
+                it.x * (sensitivity / 100f) * if (invertX) -1 else 1
+            ))
         }
 
         fire_button.setOnClickListener {
             vibrateButtonPress()
-            sendCommand("fire")
+            sendCommand(if (reloadAfterFiring) Command.FIRE_AND_RELOAD else Command.FIRE)
         }
 
         home_button.setOnClickListener {
             vibrateButtonPress()
-            toggleMenu()
-            sendCommand("home")
+            sendCommand(Command.HOME)
         }
 
-        open_breach_button.setOnClickListener {
+        breach_button.setOnClickListener {
             vibrateButtonPress()
-            toggleMenu()
-            sendCommand("open_breach")
+            sendCommand(if (sentryState == SentryState.BREACH_OPEN) Command.CLOSE_BREACH else Command.OPEN_BREACH)
         }
 
-        close_breach_button.setOnClickListener {
+        reload_button.setOnClickListener {
             vibrateButtonPress()
-            toggleMenu()
-            sendCommand("close_breach")
+            sendCommand(Command.RELOAD)
+        }
+
+        motors_button.setOnClickListener {
+            vibrateButtonPress()
+            sendCommand(if (sentryState == SentryState.MOTORS_OFF) Command.MOTORS_ON else Command.MOTORS_OFF)
         }
 
         menu_button.setOnClickListener { toggleMenu() }
 
         set_server_address_button.setOnClickListener {
             finish()
-            startActivity(Intent(this, SettingsActivity::class.java))
+            startActivity(Intent(this, ServerSettingsActivity::class.java))
+        }
+
+        sensitivity_slider.setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                sensitivity = progress
+                sensitivity_value.text = "$progress%"
+            }
+        })
+
+        reload_after_firing_checkbox.setOnCheckedChangeListener { _: CompoundButton, b: Boolean ->
+            reloadAfterFiring = b
+        }
+
+        invert_y_checkbox.setOnCheckedChangeListener { _: CompoundButton, b: Boolean ->
+            invertY = b
+        }
+
+        invert_x_checkbox.setOnCheckedChangeListener { _: CompoundButton, b: Boolean ->
+            invertX = b
         }
 
         updateUi()
@@ -119,6 +169,13 @@ class MainActivity : Activity() {
         Log.i(logTag, "Stopping")
         stopVideo()
         stopNetwork()
+        with (preferences.edit()) {
+            putInt("sensitivity", sensitivity)
+            putBoolean("reload_after_firing", reloadAfterFiring)
+            putBoolean("invert_y", invertY)
+            putBoolean("invert_x", invertX)
+            apply()
+        }
         super.onStop()
     }
 
@@ -130,6 +187,7 @@ class MainActivity : Activity() {
         Log.i(logTag, "Initializing network")
         networkThread = Thread(Runnable {
             while (!isStopped) {
+                playVideo(placeholderVideoCommand)
                 socket = Socket()
                 try {
                     socket!!.connect(serverAddress, 5000)
@@ -193,8 +251,15 @@ class MainActivity : Activity() {
                                 this.queuePosition =  json.getInt("queue_position")
                                 updateUi()
                             }
-                            json.has("sentry_state") -> {
-                                sentryState = json.getString("sentry_state")!!
+                            json.has("status") -> {
+                                sentryState = try {
+                                    SentryState.valueOf(json.getString("status")!!.toUpperCase())
+                                } catch (e: IllegalArgumentException) {
+                                    Log.w(logTag, "Received invalid sentry status ${json.getString("status")}")
+                                    sentryState
+                                }
+                                pitchPosition = json.getInt("pitch")
+                                yawPosition = json.getInt("yaw")
                                 updateUi()
                             }
                             else -> {
@@ -226,8 +291,8 @@ class MainActivity : Activity() {
         networkThread = null
     }
 
-    private fun sendCommand(command: String) {
-        Thread(Runnable { tx?.println("""{"command":"$command"}""") }).start()
+    private fun sendCommand(command: Command) {
+        Thread(Runnable { tx?.println("""{"command":"${command.toString().toLowerCase()}"}""") }).start()
     }
 
     private fun toggleMenu() {
@@ -239,17 +304,30 @@ class MainActivity : Activity() {
                         .translationX(-menu.width.toFloat() + 1)
                         .setDuration(200)
                         .withEndAction {
-                            menu.visibility = View.INVISIBLE
+                            menu.visibility = INVISIBLE
                             updateUi()
+                        }
+                        .start()
+                    settings_container.animate()
+                        .alpha(0f)
+                        .setDuration(200)
+                        .withEndAction {
+                            settings_container.visibility = INVISIBLE
                         }
                         .start()
                 }
                 else -> {
                     menu_button.setImageResource(R.drawable.ic_arrow_back_white_24dp)
-                    menu.visibility = View.VISIBLE
+                    menu.visibility = VISIBLE
+                    settings_container.alpha = 0f
+                    settings_container.visibility = VISIBLE
                     updateUi()
                     menu.animate()
                         .translationX(0f)
+                        .setDuration(200)
+                        .start()
+                    settings_container.animate()
+                        .alpha(1f)
                         .setDuration(200)
                         .start()
                 }
@@ -264,10 +342,13 @@ class MainActivity : Activity() {
                 !connected -> "Connecting to ${serverAddress.hostString}:${serverAddress.port}..."
                 videoError != "" -> "Error playing stream: $videoError"
                 queuePosition > 0 -> "Someone else is already in control"
-                sentryState == "error" -> "Hardware error, restart Arduino"
-                sentryState == "homing" -> "Sentry is homing..."
-                sentryState == "homing_required" -> "Homing required"
-                sentryState == "busy" -> "Please wait..."
+                sentryState == SentryState.ERROR -> "Hardware error, restart Arduino"
+                sentryState == SentryState.HOMING_FAILED -> "Homing failed"
+                sentryState == SentryState.HOMING_REQUIRED -> "Homing required"
+                sentryState == SentryState.HOMING -> "Homing..."
+                sentryState == SentryState.MOTORS_OFF -> "Motors are turned off"
+                sentryState == SentryState.NOT_LOADED -> "Reload"
+                sentryState == SentryState.RELOADING -> "Reloading..."
                 else -> null
             }
             when (msg) {
@@ -282,13 +363,22 @@ class MainActivity : Activity() {
             }
 
             val isActiveClient = connected && queuePosition == 0
+            val menuOpen = menu.visibility == VISIBLE
+            val canMove = isActiveClient && when (sentryState) {
+                SentryState.READY, SentryState.NOT_LOADED, SentryState.BREACH_OPEN -> true
+                else -> false
+            }
 
-            joystick.visibility = if (isActiveClient) VISIBLE else GONE
+            joystick.visibility = if (isActiveClient && !menuOpen && canMove) VISIBLE else GONE
             joystick.isEnabled = joystick.visibility == View.VISIBLE
-            fire_button.visibility = if (isActiveClient && menu.visibility != VISIBLE) VISIBLE else GONE
-            home_button.visibility = if (isActiveClient) VISIBLE else GONE
-            open_breach_button.visibility = if (isActiveClient) VISIBLE else GONE
-            close_breach_button.visibility = if (isActiveClient) VISIBLE else GONE
+            fire_button.visibility = if (isActiveClient && !menuOpen && sentryState == SentryState.READY) VISIBLE else GONE
+            home_button.visibility = if (isActiveClient && sentryState != SentryState.MOTORS_OFF) VISIBLE else GONE
+            breach_button.visibility = if (isActiveClient && (sentryState == SentryState.NOT_LOADED || sentryState == SentryState.BREACH_OPEN)) VISIBLE else GONE
+            reload_button.visibility = if (isActiveClient && sentryState == SentryState.NOT_LOADED) VISIBLE else GONE
+            motors_button.visibility = if (isActiveClient) VISIBLE else GONE
+
+            motors_button.text = if (sentryState == SentryState.MOTORS_OFF) "Turn Motors On" else "Turn Motors Off"
+            breach_button.text = if (sentryState == SentryState.BREACH_OPEN) "Close Breach" else "Open Breach"
         }
     }
 

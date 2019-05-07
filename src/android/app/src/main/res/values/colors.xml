@@ -3,4 +3,5 @@
     <color name="yellow">#FFD45E</color>
     <color name="green">#19A974</color>
     <color name="red">#FF4136</color>
+    <color name="foreground">#FFFFFF</color>
 </resources>
