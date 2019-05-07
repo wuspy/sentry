@@ -23,8 +23,8 @@ pub enum Command {
     Fire,
     OpenBreach,
     CloseBreach,
-    CycleBreach,
-    FireAndCycleBreach,
+    Reload,
+    FireAndReload,
     MotorsOn,
     MotorsOff,
 }
@@ -32,9 +32,13 @@ pub enum Command {
 #[derive(Clone)]
 pub enum HardwareStatus {
     Ready,
+    NotLoaded,
+    BreachOpen,
+    Reloading,
     HomingRequired,
     Homing,
     MotorsOff,
+    HomingFailed,
     Error,
 }
 

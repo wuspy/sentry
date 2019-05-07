@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::mem;
 use std::io;
 use byteorder::{BigEndian, LittleEndian, ByteOrder};
@@ -12,6 +12,8 @@ use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSou
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use crc::crc16::checksum_usb as crc16;
 use crate::sentry::config::Config;
+use std::sync::Mutex;
+use crate::sentry::MessageContent::HardwareState;
 
 struct ArduinoCodec {
     config: Config,
@@ -37,9 +39,13 @@ impl Decoder for ArduinoCodec {
                 Ok(Some(MessageContent::HardwareState {
                     status: match message[2] {
                         100 => HardwareStatus::Ready,
-                        101 => HardwareStatus::HomingRequired,
-                        102 => HardwareStatus::Homing,
-                        103 => HardwareStatus::MotorsOff,
+                        101 => HardwareStatus::NotLoaded,
+                        102 => HardwareStatus::BreachOpen,
+                        103 => HardwareStatus::Reloading,
+                        104 => HardwareStatus::HomingRequired,
+                        105 => HardwareStatus::Homing,
+                        106 => HardwareStatus::MotorsOff,
+                        107 => HardwareStatus::HomingFailed,
                         _ => HardwareStatus::Error,
                     },
                     pitch_pos: BigEndian::read_u32(&message[3..]),
@@ -68,9 +74,9 @@ impl Encoder for ArduinoCodec {
             Command::Home                   => 201,
             Command::OpenBreach             => 202,
             Command::CloseBreach            => 203,
-            Command::CycleBreach            => 204,
+            Command::Reload                 => 204,
             Command::Fire                   => 205,
-            Command::FireAndCycleBreach     => 206,
+            Command::FireAndReload          => 206,
             Command::MotorsOn               => 207,
             Command::MotorsOff              => 208,
         };
@@ -123,6 +129,8 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
     );
 
     // Spawn a task to forward server messages to the arduino
+    let mut message_count = 0;
+    let mut last_calculation_time = SystemTime::now();
     tokio::spawn(in_message_stream
         .map_err(|_| ())
         .filter_map(move |message| {
@@ -137,7 +145,21 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
             }
         })
         .filter(move |command| {
-            // TODO rate-limit the amount of commands we get to prevent straining the serial connection
+            // Rate-limit the amount of commands we get to prevent straining the serial connection
+            message_count += 1;
+            if message_count >= 10 {
+                // Allow <=10 messages/100ms
+                match last_calculation_time.elapsed() {
+                    Ok(duration) if duration.as_millis() < 100 => {
+                        warn!("Discarding arduino command due to rate-limiting");
+                        return false;
+                    },
+                    _ => {}
+                }
+
+                message_count = 0;
+                last_calculation_time = SystemTime::now();
+            }
             true
         })
         .forward(arduino_sink.sink_map_err(|_| ()))

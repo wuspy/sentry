@@ -28,8 +28,13 @@ uint64_t lastMessageTime = 0;
 volatile uint8_t *ledRegister;
 uint8_t ledBitmask;
 
-Status status = STATUS_HOMING_REQUIRED;
-bool loaded = false;
+Status status = STATUS_MOTORS_OFF;
+bool loaded = true; // Safer to assume loaded when powered on
+bool breachOpen = false;
+bool homed = false;
+bool homing = false;
+bool homing_failed = false;
+bool reloading = false;
 
 inline void ledOn()
 {
@@ -52,81 +57,161 @@ bool isEndstopHit(uint8_t pin)
     return digitalRead(pin) == HIGH;
 }
 
-void home()
+bool tryHome(StepperDriver &driver, uint8_t endstopPin)
 {
-    pitch.setEnabled(true);
-    yaw.setEnabled(true);
-
-    // Stop motors
-    pitch.moveTo(0);
-    yaw.moveTo(0);
-    pitch.setPosition(0);
-    yaw.setPosition(0);
-    while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
-        poll();
-    }
-
-    // Move until endstops trigger
-    pitch.moveTo(PITCH_MAX_STEPS * (PITCH_HOME_INVERTED ? 2 : -2));
-    yaw.moveTo(YAW_MAX_STEPS * (YAW_HOME_INVERTED ? -2 : 2));
-    while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
-        if (isEndstopHit(PITCH_ENDSTOP_PIN)) {
-            pitch.setPosition(0);
-            pitch.emergencyStop();
+    // Move until endstop triggers
+    while (driver.getDistanceToGo() != 0) {
+        if (isEndstopHit(endstopPin)) {
+            driver.setPosition(0);
+            driver.emergencyStop();
+            return true;
         }
-        if (isEndstopHit(YAW_ENDSTOP_PIN)) {
-            yaw.setPosition(0);
-            yaw.emergencyStop();
-        }
-        poll();
+        driver.poll();
+    }
+    return false;
+}
+
+bool homeAxis(StepperDriver &driver, int32_t max, int32_t speed, bool inverted, bool bidirectioal, int32_t offset, uint8_t endstopPin)
+{
+    if (!driver.isEnabled()) {
+        return false;
     }
 
-    // Move axes to 0 degrees
-    pitch.moveTo(PITCH_HOME_OFFSET);
-    yaw.moveTo(YAW_HOME_OFFSET);
-    while (pitch.getDistanceToGo() != 0 || yaw.getDistanceToGo() != 0) {
-        poll();
+    driver.setMaxSpeed(static_cast<float>(speed));
+
+    // Stop motor
+    driver.emergencyStop();
+    driver.setPosition(0);
+    driver.moveTo(0);
+
+    if (bidirectioal) {
+        if (offset > 0) {
+            driver.moveTo(-offset);
+        } else if (offset < 0) {
+            driver.moveTo(offset);
+        } else {
+            driver.moveTo(max / 2 * 1.1);
+        }
+        if (!tryHome(driver, endstopPin)) {
+            if (offset > 0) {
+                driver.moveTo(max - offset);
+            } else if (offset < 0) {
+                driver.moveTo(offset - max);
+            } else {
+                driver.moveTo(max / 2 * 1.1);
+            }
+            if (!tryHome(driver, endstopPin)) {
+                return false;
+            }
+        }
+    } else {
+        driver.moveTo(max * (inverted ? 1.1 : -1.1));
+        if (!tryHome(driver, endstopPin)) {
+            return false;
+        }
     }
-    pitch.setPosition(PITCH_HOME_INVERTED ? PITCH_MAX_STEPS : 0);
-    pitch.moveTo(pitch.getPosition());
-    yaw.setPosition(YAW_HOME_INVERTED ? YAW_MAX_STEPS : 0);
-    yaw.moveTo(yaw.getPosition());
+
+    driver.setPosition(inverted ? max - offset : offset);
+    driver.moveTo(driver.getPosition());
+    return true;
+}
+
+void home(int32_t pitchSpeed, int32_t yawSpeed)
+{
+    if (!pitch.isEnabled() || !yaw.isEnabled()) {
+        return;
+    }
+
+    homing = true;
+    homing_failed = false;
+    sendMessage();
+
+    if (
+        homeAxis(
+            pitch,
+            PITCH_MAX_STEPS,
+            pitchSpeed,
+            PITCH_HOME_INVERTED,
+            PITCH_HOME_BIDIRECTIONAL,
+            PITCH_HOME_OFFSET,
+            PITCH_ENDSTOP_PIN
+        ) &&
+        homeAxis(
+            yaw,
+            YAW_MAX_STEPS,
+            yawSpeed,
+            YAW_HOME_INVERTED,
+            YAW_HOME_BIDIRECTIONAL,
+            YAW_HOME_OFFSET,
+            YAW_ENDSTOP_PIN
+        )
+    ) {
+        homed = true;
+    } else {
+        homing_failed = true;
+    }
+    homing = false;
+}
+
+void move(int32_t pitchSpeed, int32_t yawSpeed)
+{
+    if (!homed || !pitch.isEnabled() || !yaw.isEnabled()) {
+        return;
+    }
+    pitch.setMaxSpeed(static_cast<float>(abs(pitchSpeed)));
+    pitch.moveTo(pitchSpeed >= 0 ? PITCH_MAX_STEPS : 0);
+    yaw.setMaxSpeed(static_cast<float>(abs(yawSpeed)));
+    yaw.moveTo(yawSpeed >= 0 ? YAW_MAX_STEPS : 0);
 }
 
 void openBreach(bool disable)
 {
-    if (!loaded && status != STATUS_MOTORS_OFF) {
+    if (!loaded) {
         slide.setEnabled(true);
         slide.moveTo(3.3 * SLIDE_STEPS_PER_REV);
         slide.wait();
         if (disable) {
             slide.setEnabled(false);
         }
+        breachOpen = true;
     }
 }
 
 void closeBreach()
 {
-    if (!loaded && status != STATUS_MOTORS_OFF) {
+    if (breachOpen) {
         slide.setEnabled(true);
         slide.moveTo(0.6 * SLIDE_STEPS_PER_REV);
         slide.wait();
         slide.setEnabled(false);
         loaded = true;
+        breachOpen = false;
     }
 }
 
 void fire(bool disable)
 {
-    if (loaded && status != STATUS_MOTORS_OFF) {
+    if (loaded) {
         slide.setEnabled(true);
-        slide.moveTo(0);
+        slide.moveTo(0.2 * SLIDE_STEPS_PER_REV);
         slide.wait();
+        slide.moveTo(0);
+        slide.setPosition(0);
         if (disable) {
             slide.setEnabled(false);
         }
+        status = STATUS_NOT_LOADED;
         loaded = false;
     }
+}
+
+void reload()
+{
+    reloading = true;
+    sendMessage();
+    openBreach(false);
+    closeBreach();
+    reloading = false;
 }
 
 uint64_t timeDiff(uint64_t current, uint64_t previous)
@@ -198,25 +283,17 @@ void loop()
                 
                 switch (command) {
                     case COMMAND_MOVE:
-                        if (status == STATUS_READY) {
+                        {
                             int32_t pitchSpeed = deserialize<int32_t>(&buffer[3]);
                             int32_t yawSpeed = deserialize<int32_t>(&buffer[7]);
-                            pitch.setMaxSpeed(static_cast<float>(abs(pitchSpeed)));
-                            pitch.moveTo(pitchSpeed >= 0 ? PITCH_MAX_STEPS : 0);
-                            yaw.setMaxSpeed(static_cast<float>(abs(yawSpeed)));
-                            yaw.moveTo(yawSpeed >= 0 ? YAW_MAX_STEPS : 0);
+                            move(pitchSpeed, yawSpeed);
                         }
                         break;
                     case COMMAND_HOME:
-                        if (status != STATUS_MOTORS_OFF && status != STATUS_ERROR) {
+                        {
                             uint32_t pitchSpeed = deserialize<uint32_t>(&buffer[3]);
                             uint32_t yawSpeed = deserialize<uint32_t>(&buffer[7]);
-                            pitch.setMaxSpeed(static_cast<float>(pitchSpeed));
-                            yaw.setMaxSpeed(static_cast<float>(yawSpeed));
-                            status = STATUS_HOMING;
-                            sendMessage();
-                            home();
-                            status = STATUS_READY;
+                            home(pitchSpeed, yawSpeed);
                         }
                         break;
                     case COMMAND_OPEN_BREACH:
@@ -225,31 +302,26 @@ void loop()
                     case COMMAND_CLOSE_BREACH:
                         closeBreach();
                         break;
-                    case COMMAND_CYCLE_BREACH:
-                        openBreach(false);
-                        closeBreach();
+                    case COMMAND_RELOAD:
+                        reload();
                         break;
                     case COMMAND_FIRE:
                         fire(true);
                         break;
-                    case COMMAND_FIRE_AND_CYCLE_BREACH:
+                    case COMMAND_FIRE_AND_RELOAD:
                         fire(false);
-                        openBreach(false);
-                        closeBreach();
+                        reload();
                         break;
                     case COMMAND_MOTORS_ON:
-                        if (status == STATUS_MOTORS_OFF) {
-                            pitch.setEnabled(true);
-                            yaw.setEnabled(true);
-                            status = STATUS_HOMING_REQUIRED;
-                        }
+                        pitch.setEnabled(true);
+                        yaw.setEnabled(true);
                         break;
                     case COMMAND_MOTORS_OFF:
                         pitch.setEnabled(false);
                         yaw.setEnabled(false);
                         pitch.emergencyStop();
                         yaw.emergencyStop();
-                        status = STATUS_MOTORS_OFF;
+                        homed = false;
                         break;
                     default:
                         break;
@@ -276,7 +348,24 @@ void loop()
     poll();
 }
 
-void sendMessage() {    
+void sendMessage() {
+    Status status = STATUS_READY;
+    if (homing_failed) {
+        status = STATUS_HOMING_FAILED;
+    } else if (!pitch.isEnabled() || !yaw.isEnabled()) {
+        status = STATUS_MOTORS_OFF;
+    } else if (homing) {
+        status = STATUS_HOMING;
+    } else if (!homed) {
+        status = STATUS_HOMING_REQUIRED;
+    } else if (reloading) {
+        status = STATUS_RELOADING;
+    } else if (breachOpen) {
+        status = STATUS_BREACH_OPEN;
+    } else if (!loaded) {
+        status = STATUS_NOT_LOADED;
+    }
+    
     // Write status
     serialize(&buffer[2], static_cast<uint8_t>(status));
     // Write current position

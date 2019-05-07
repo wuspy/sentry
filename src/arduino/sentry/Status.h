@@ -5,10 +5,13 @@ namespace Sentry {
 
 typedef enum : uint8_t {
     STATUS_READY = 100,
+    STATUS_NOT_LOADED,
+    STATUS_BREACH_OPEN,
+    STATUS_RELOADING,
     STATUS_HOMING_REQUIRED,
     STATUS_HOMING,
     STATUS_MOTORS_OFF,
-    STATUS_ERROR,
+    STATUS_HOMING_FAILED,
 } Status;
 
 } // namespace Sentry
