@@ -7,6 +7,7 @@
         <attr name="border_width" format="dimension" />
         <attr name="zone_diameter" format="dimension" />
         <attr name="button_diameter" format="dimension" />
+        <attr name="deadzone" format="float"/>
         <attr name="interval" format="integer" />
     </declare-styleable>
 </resources>

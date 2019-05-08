@@ -48,6 +48,8 @@ class JoystickView : View {
     var location = PointF()
         private set
 
+    var deadzone = 0.1F
+
     private var _pressed = false
     private var _ringAnimator = ValueAnimator()
     private var _origin = PointF()
@@ -93,6 +95,7 @@ class JoystickView : View {
             R.styleable.JoystickView_button_diameter,
             TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, buttonDiameter, metrics)
         )
+        deadzone = min(abs(ta.getDimension(R.styleable.JoystickView_deadzone, deadzone)), 1f)
 
         zoneColor = ta.getColor(R.styleable.JoystickView_zone_color, zoneColor)
         buttonColor = ta.getColor(R.styleable.JoystickView_button_color, buttonColor)
@@ -167,6 +170,13 @@ class JoystickView : View {
         if (_pressed) {
             location.x = _rawLocation.x / zoneRadius
             location.y = -_rawLocation.y / zoneRadius
+            // Apply the dead-zone
+            if (abs(location.x) < deadzone) {
+                location.x = 0f
+            }
+            if (abs(location.y) < deadzone) {
+                location.y = 0f
+            }
         } else {
             location.x = 0f
             location.y = 0f
