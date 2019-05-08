@@ -238,6 +238,7 @@ fn handle_new_client(
                     .ok_or(format!("Could not create udpsink element"))?;
                 let tee = get_tee(&pipeline)?;
 
+                sink.set_property_from_str("async", "false");
                 sink.set_property_from_str("bind-address", format!("{}", handshake.server_addr.ip()).as_str());
                 sink.set_property_from_str("bind-port", format!("{}", handshake.server_addr.port()).as_str());
                 sink.set_property_from_str("host", format!("{}", handshake.client_addr.ip()).as_str());
