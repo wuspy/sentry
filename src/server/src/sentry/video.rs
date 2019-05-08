@@ -106,7 +106,7 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
-    let command = format!("{} ! tee name=tee", config.video.encoder.as_str());
+    let command = format!("{} ! tee name=tee allow-not-linked=true", config.video.encoder.as_str());
     let main_loop = glib::MainLoop::new(None, false);
 
     info!("Creating pipeline with \"{}\"", command);
@@ -146,10 +146,6 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
         }
     });
 
-    pipeline
-        .set_state(gst::State::Ready)
-        .map_err(|_| format!("Could not set pipeline to state Ready"))?;
-
     thread::spawn(move || {
         main_loop.run();
     });
@@ -181,8 +177,18 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     Ok((in_message_sink, out_message_stream))
 }
 
+fn get_client_queue_name(client: &Client) -> String {
+    format!("queue_{}", client.address)
+}
+
 fn get_client_sink_name(client: &Client) -> String {
     format!("sink_{}", client.address)
+}
+
+fn get_client_queue(pipeline: &gst::Pipeline, client: &Client) -> Result<gst::Element, String> {
+    pipeline
+        .get_by_name(get_client_queue_name(client).as_str())
+        .ok_or(format!("Could not find queue for client {}", client.address))
 }
 
 fn get_client_sink(pipeline: &gst::Pipeline, client: &Client) -> Result<gst::Element, String> {
@@ -203,7 +209,7 @@ fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<()
     pipeline.remove(&sink).map_err(|_| format!("Could not remove sink from pipeline"))?;
     sink
         .set_state(gst::State::Null)
-        .map_err(|_| format!("Could not set sink to state Null"))?;
+        .map_err(|_| format!("Could not set {} to state Null", sink.get_name()))?;
 
     if pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
         // There are no more sinks, so stop the pipeline
@@ -226,20 +232,28 @@ fn handle_new_client(
         Ok(handshake) => future::Either::B(handshake
             .and_then(move |handshake: UdpHandshakeComplete| {
                 info!("UDP handshake succeeded for client {}", client.address);
+                let queue = gst::ElementFactory::make("queue", get_client_queue_name(&client).as_str())
+                    .ok_or(format!("Could not create queue element"))?;
                 let sink = gst::ElementFactory::make("udpsink", get_client_sink_name(&client).as_str())
                     .ok_or(format!("Could not create udpsink element"))?;
+                let tee = get_tee(&pipeline)?;
 
                 sink.set_property_from_str("bind-address", format!("{}", handshake.server_addr.ip()).as_str());
                 sink.set_property_from_str("bind-port", format!("{}", handshake.server_addr.port()).as_str());
                 sink.set_property_from_str("host", format!("{}", handshake.client_addr.ip()).as_str());
                 sink.set_property_from_str("port", format!("{}", handshake.client_addr.port()).as_str());
 
+                pipeline.add(&queue)
+                    .map_err(|_| format!("Could not add {} to pipeline", queue.get_name()))?;
                 pipeline.add(&sink)
-                    .map_err(|_| format!("Could not add sink to pipeline"))?;
+                    .map_err(|_| format!("Could not add {} to pipeline", sink.get_name()))?;
 
-                get_tee(&pipeline)?
+                tee
+                    .link(&queue)
+                    .map_err(|_| format!("Could not link {} to {}", tee.get_name(), queue.get_name()))?;
+                queue
                     .link(&sink)
-                    .map_err(|_| format!("Could not link tee to sink"))?;
+                    .map_err(|_| format!("Could not link {} to {}", queue.get_name(), sink.get_name()))?;
 
                 // Make sure the pipeline is playing
                 pipeline
