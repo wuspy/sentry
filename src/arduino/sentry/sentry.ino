@@ -226,9 +226,6 @@ void setup()
 
     pinMode(PITCH_ENDSTOP_PIN, INPUT_PULLUP);
     pinMode(YAW_ENDSTOP_PIN, INPUT_PULLUP);
-    pinMode(2, INPUT_PULLUP);
-    pinMode(15, INPUT_PULLUP);
-    pinMode(19, INPUT_PULLUP); 
 
     pitch.setMaxSpeed(0);
     pitch.setAcceleration(PITCH_ACCEL);
@@ -253,18 +250,6 @@ void setup()
 void loop()
 {
     uint64_t timestamp = micros();
-
-    if (digitalRead(2) == LOW) {
-        fire(false);
-        openBreach(false);
-        closeBreach();
-    }
-    if (digitalRead(19) == LOW) {
-        openBreach(true);
-    }
-    if (digitalRead(15) == LOW) {
-        closeBreach();
-    }
 
     // Read commands from serial
     while (Serial.available()) {
