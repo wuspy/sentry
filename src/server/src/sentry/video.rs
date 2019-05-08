@@ -129,7 +129,7 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                     panic!();
                 }
                 MessageView::Warning(warning) => {
-                    error!("Gstreamer: Warning from {:?}: {} {}",
+                    error!("Gstreamer: Warning from {}: {} {}",
                            warning.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
                            warning.get_error(),
                            warning.get_debug().unwrap_or("?".to_owned()));
