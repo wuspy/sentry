@@ -1,4 +1,6 @@
 use std::prelude::*;
+use std::fs;
+use std::process;
 use gstreamer::prelude::*;
 use gstreamer as gst;
 use tokio::prelude::*;
@@ -11,6 +13,7 @@ use std::thread;
 use tokio::net::UdpSocket;
 use tokio::prelude::*;
 use rand::prelude::*;
+use std::collections::HashMap;
 
 struct UdpHandshakeComplete {
     server_addr: SocketAddr,
@@ -101,12 +104,52 @@ impl Future for UdpHandshake {
     }
 }
 
+pub fn find_camera_device(properties: &HashMap<String, String>) -> Option<String> {
+    for device in fs::read_dir("/dev").ok()?
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.as_str().find("video").is_some())
+        .map(|name| format!("/dev/{}", name))
+    {
+        let info = String::from_utf8(
+            process::Command::new("udevadm")
+                .arg("info")
+                .arg("-a")
+                .arg("-n")
+                .arg(&device)
+                .output()
+                .ok()?
+                .stdout
+        ).ok()?;
+
+        if properties
+            .into_iter()
+            .filter(|&(property, value)| {
+                info.as_str().find(format!("ATTRS{{{}}}==\"{}\"", property, value).as_str()).is_none()
+            })
+            .count() == 0
+        {
+            // Device matches all properties
+            return Some(device);
+        }
+    }
+    None
+}
+
 pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     gst::init().map_err(|err| format!("Could not initialize GStreamer: {}", err))?;
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
-    let command = format!("{} ! tee name=tee allow-not-linked=true", config.video.encoder.as_str());
+    let device = find_camera_device(&config.camera)
+        .ok_or(format!("Failed to find camera device matching properties {:?}", config.camera))?;
+    info!("Found camera device {}", device);
+    let command = format!(
+        "v4l2src device={} ! {} ! tee name=tee allow-not-linked=true",
+        device,
+        config.video.encoder.as_str()
+    );
     let main_loop = glib::MainLoop::new(None, false);
 
     info!("Creating pipeline with \"{}\"", command);

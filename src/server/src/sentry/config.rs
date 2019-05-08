@@ -2,6 +2,7 @@ use std::fs;
 use std::env;
 use std::prelude::*;
 use crate::sentry::StartResult;
+use std::collections::HashMap;
 
 #[derive(Clone, Deserialize)]
 pub struct ArduinoConfig {
@@ -30,6 +31,7 @@ pub struct TcpServerConfig {
 pub struct Config {
     pub server: TcpServerConfig,
     pub video: VideoConfig,
+    pub camera: HashMap<String, String>,
     pub arduino: ArduinoConfig,
 }
 
