@@ -16,7 +16,7 @@ import java.net.URISyntaxException
 
 class ServerSettingsActivity : Activity() {
     companion object {
-        val DEFAULT_SERVER_ADDRESS = InetSocketAddress("10.42.0.1", 8080)
+        val DEFAULT_SERVER_ADDRESS = InetSocketAddress("192.168.0.1", 8080)
     }
 
     private lateinit var serverAddress: InetSocketAddress
