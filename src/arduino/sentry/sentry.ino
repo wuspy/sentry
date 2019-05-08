@@ -168,7 +168,7 @@ void openBreach(bool disable)
 {
     if (!loaded) {
         slide.setEnabled(true);
-        slide.moveTo(3.3 * SLIDE_STEPS_PER_REV);
+        slide.moveTo(SLIDE_OPEN_POS);
         slide.wait();
         if (disable) {
             slide.setEnabled(false);
@@ -181,7 +181,7 @@ void closeBreach()
 {
     if (breachOpen) {
         slide.setEnabled(true);
-        slide.moveTo(0.6 * SLIDE_STEPS_PER_REV);
+        slide.moveTo(SLIDE_CLOSED_POS);
         slide.wait();
         slide.setEnabled(false);
         loaded = true;
@@ -193,7 +193,7 @@ void fire(bool disable)
 {
     if (loaded) {
         slide.setEnabled(true);
-        slide.moveTo(0.2 * SLIDE_STEPS_PER_REV);
+        slide.moveTo(SLIDE_FIRED_POS);
         slide.wait();
         slide.moveTo(0);
         slide.setPosition(0);
@@ -231,16 +231,18 @@ void setup()
     pinMode(19, INPUT_PULLUP); 
 
     pitch.setMaxSpeed(0);
-    pitch.setAcceleration(20000);
+    pitch.setAcceleration(PITCH_ACCEL);
     pitch.setEnabled(false);
 
     yaw.setMaxSpeed(0);
-    yaw.setAcceleration(15000);
+    yaw.setAcceleration(YAW_ACCEL);
     yaw.setEnabled(false);
 
     slide.setEnabled(false);
-    slide.setAcceleration(40000);
-    slide.setMaxSpeed(2200);
+    slide.setAcceleration(SLIDE_ACCEL);
+    slide.setMaxSpeed(SLIDE_SPEED);
+    slide.setPosition(SLIDE_CLOSED_POS);
+    slide.moveTo(SLIDE_CLOSED_POS);
 
     ledOn();
     Serial.begin(115200);
@@ -321,7 +323,6 @@ void loop()
                         yaw.setEnabled(false);
                         pitch.emergencyStop();
                         yaw.emergencyStop();
-                        homed = false;
                         break;
                     default:
                         break;
