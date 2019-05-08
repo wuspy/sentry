@@ -5,9 +5,9 @@ use tokio::prelude::*;
 use futures::future;
 use futures::sync::mpsc::{UnboundedSender, unbounded};
 use crate::sentry::{Message, StartResult, UnboundedChannel, MessageContent, Client, MessageSource};
-use gstreamer::{ClockTime};
 use crate::sentry::config::Config;
 use std::net::{SocketAddr, IpAddr};
+use std::thread;
 use tokio::net::UdpSocket;
 use tokio::prelude::*;
 use rand::prelude::*;
@@ -106,37 +106,53 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
 
-    let pipeline = gst::Pipeline::new("pipeline");
-    info!("Creating bin \"{}\"", config.video.encoder);
-    let bin = gst::parse_bin_from_description(config.video.encoder.as_str(), true)
-        .map_err(|err| format!("Could not parse GStreamer encoder: {}", err))?;
-    let tee = gst::ElementFactory::find("tee")
-        .unwrap()
-        .create("tee")
+    let command = format!("{} ! tee name=tee", config.video.encoder.as_str());
+    let main_loop = glib::MainLoop::new(None, false);
+
+    info!("Creating pipeline with \"{}\"", command);
+    let pipeline = gst::parse_launch(command.as_str())
+        .map_err(|err| format!("Failed to parse gstreamer command \"{}\": {}", command, err))?
+        .dynamic_cast::<gst::Pipeline>()
         .unwrap();
 
     let bus = pipeline.get_bus().ok_or(format!("Could not get bus for pipeline"))?;
+    bus.add_watch({
+        let pipeline = pipeline.clone();
+        move |_, msg| {
+            use gst::message::MessageView;
+            match msg.view() {
+                MessageView::Error(err) => {
+                    error!("Gstreamer: Error from {}: {} {}",
+                           err.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
+                           err.get_error(),
+                           err.get_debug().unwrap_or("?".to_owned()));
+                    panic!();
+                }
+                MessageView::Warning(warning) => {
+                    error!("Gstreamer: Warning from {:?}: {} {}",
+                           warning.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
+                           warning.get_error(),
+                           warning.get_debug().unwrap_or("?".to_owned()));
+                }
+                MessageView::StateChanged(state) => {
+                    if state.get_src().map(|s| s == pipeline).unwrap_or(false) {
+                        info!("Gstreamer: state changed to {:?}", state.get_current());
+                    }
+                }
+                _ => {}
+            };
 
-    bus.add_watch(move |_, msg| {
-        use gst::message::MessageView;
-
-        match msg.view() {
-            MessageView::Error(err) => {
-                error!("Gstreamer: {}", err.get_debug().unwrap());
-                panic!(err.get_debug().unwrap());
-            },
-            MessageView::Warning(warning) => {
-                warn!("Gstreamer: {}", warning.get_debug().unwrap());
-            }
-            _ => {}
-        };
-
-        glib::Continue(true)
+            glib::Continue(true)
+        }
     });
 
-    pipeline.add(&bin).map_err(|_| format!("Could not add \"{}\" to pipeline", config.video.encoder))?;
-    pipeline.add(&tee).map_err(|_| format!("Could not add tee to pipeline"))?;
-    bin.link(&tee).map_err(|_| format!("Could not link \"{}\" to tee", config.video.encoder))?;
+    pipeline
+        .set_state(gst::State::Ready)
+        .map_err(|_| format!("Could not set pipeline to state Ready"))?;
+
+    thread::spawn(move || {
+        main_loop.run();
+    });
 
     tokio::spawn(in_message_stream
         .map_err(|_| ())
@@ -151,11 +167,11 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                             out_message_sink.clone()
                         ).map_err(move |err| error!("Error adding video sink for {}: {}", client.address, err))
                     );
-                },
+                }
                 MessageContent::ClientDisconnected(client) => {
                     handle_dropped_client(&pipeline, &client)
                         .map_err(move|err| error!("Error dropping video sink for {}: {}", client.address, err));
-                },
+                }
                 _ => {}
             }
             Ok(())
@@ -185,10 +201,16 @@ fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<()
     let sink = get_client_sink(pipeline, client)?;
     get_tee(pipeline)?.unlink(&sink);
     pipeline.remove(&sink).map_err(|_| format!("Could not remove sink from pipeline"))?;
+    sink
+        .set_state(gst::State::Null)
+        .map_err(|_| format!("Could not set sink to state Null"))?;
+
     if pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
         // There are no more sinks, so stop the pipeline
-        info!("Stopping GStreamer pipeline");
-        pipeline.set_state(gst::State::Ready);
+        pipeline
+            .set_state(gst::State::Null)
+            .map_err(|_| format!("Could not set pipeline to state Null"))?;
+
     }
     Ok(())
 }
@@ -220,10 +242,9 @@ fn handle_new_client(
                     .map_err(|_| format!("Could not link tee to sink"))?;
 
                 // Make sure the pipeline is playing
-                info!("Setting gstreamer pipeline playing");
                 pipeline
                     .set_state(gst::State::Playing)
-                    .map_err(|_| format!("Could not play pipeline"))?;
+                    .map_err(|_| format!("Could not set pipeline to state Playing"))?;
 
                 Ok(())
             })

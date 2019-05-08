@@ -8,8 +8,7 @@ use tokio::prelude::*;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
 use crate::sentry::config::Config;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_io::_tokio_codec::Decoder;
-use tokio::codec::LinesCodec;
+use tokio::codec::{LinesCodec, Decoder};
 
 struct ClientTx {
     address: SocketAddr,
@@ -79,8 +78,6 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
     let clients = Arc::new(RwLock::new(ClientQueue::new(config.clone())));
     let addr = SocketAddr::new(config.server.host.as_str().parse().unwrap(), config.server.port);
-    let clients_clone = clients.clone();
-    let config_clone = config.clone();
 
     info!("Binding TCP server on {}...", addr);
     let mut listener = TcpListener::bind(&addr)
@@ -94,11 +91,16 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
         .map_err(|err| {
             error!("TCP client connection error: {}", err);
         })
-        .for_each( move |socket| {
-            info!("Incoming TCP connection from {}", socket.peer_addr().unwrap());
-            tokio::spawn(
-                handle_client(socket, config.clone(), out_message_sink.clone(), clients.clone())
-            )
+        .for_each({
+            let config = config.clone();
+            let clients = clients.clone();
+            move |socket| {
+                info!("Incoming TCP connection from {}", socket.peer_addr().unwrap());
+                tokio::spawn(
+                    handle_client(socket, config.clone(), out_message_sink.clone(), clients.clone())
+                );
+                Ok(())
+            }
         })
     );
 
@@ -108,24 +110,21 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
         .for_each(move |message| {
             match message.content {
                 MessageContent::VideoOffer { nonce, for_client, rtp_address } => {
-                    let clients = clients_clone.clone();
                     clients.write().unwrap().send(for_client, json!({
                         "video_offer": {
                             "nonce": nonce,
                             "rtp_address": rtp_address,
                         }
                     }).to_string());
-                },
+                }
                 MessageContent::VideoStreaming { for_client } => {
-                    let clients = clients_clone.clone();
                     clients.write().unwrap().send(for_client, json!({
                         "video_streaming": {
-                            "gstreamer_command": config_clone.video.decoder,
+                            "gstreamer_command": config.video.decoder,
                         }
                     }).to_string());
-                },
+                }
                 MessageContent::HardwareState { pitch_pos, yaw_pos, status } => {
-                    let clients = clients_clone.clone();
                     clients.write().unwrap().send_to_all(json!({
                         "status": match status {
                             HardwareStatus::Ready => "ready",
@@ -142,7 +141,7 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                         "yaw": yaw_pos,
                     }).to_string());
                 }
-                _ => {},
+                _ => {}
             }
             Ok(())
         })
@@ -180,42 +179,47 @@ fn handle_client(
         .and_then(|_| Ok(()))
     );
 
-    let clients_clone = clients.clone();
     client_source
         .map_err(|_| ())
         // Parse client messages to Message structs
-        .filter_map(move |message| {
-            match process_message(message) {
-                Some(content) => Some(Message {
-                    content,
-                    source: MessageSource::Client(Client {
-                        address: addr,
-                        queue_position: clients.read().unwrap()
-                            .index_of(addr)
-                            .unwrap_or(std::usize::MAX),
-                    })
-                }),
-                _ => None
+        .filter_map({
+            let clients = clients.clone();
+            move |message| {
+                match process_message(message) {
+                    Some(content) => Some(Message {
+                        content,
+                        source: MessageSource::Client(Client {
+                            address: addr,
+                            queue_position: clients.read().unwrap()
+                                .index_of(addr)
+                                .unwrap_or(std::usize::MAX),
+                        })
+                    }),
+                    _ => None
+                }
             }
         })
         // Forward all of this client's messages to the server channel
         .forward(out_message_sink.clone().sink_map_err(|_| ()))
-        .and_then(move |_| {
-            // Send a message on the server channel notifying the client is disconnected
-            info!("Client {} has disconnected", addr);
-            let mut clients = clients_clone.write().unwrap();
-            let queue_position = clients
-                .index_of(addr)
-                .unwrap_or(std::usize::MAX);
-            clients.remove(addr);
-            out_message_sink.unbounded_send(Message {
-                content: MessageContent::ClientDisconnected(Client {
-                    address: addr,
-                    queue_position,
-                }),
-                source: MessageSource::WebsocketServer,
-            }).map_err(|err| format!("Failed to send message: {}", err)).unwrap();
-            Ok(())
+        .and_then({
+            let clients = clients.clone();
+            move |_| {
+                // Send a message on the server channel notifying the client is disconnected
+                info!("Client {} has disconnected", addr);
+                let mut clients = clients.write().unwrap();
+                let queue_position = clients
+                    .index_of(addr)
+                    .unwrap_or(std::usize::MAX);
+                clients.remove(addr);
+                out_message_sink.unbounded_send(Message {
+                    content: MessageContent::ClientDisconnected(Client {
+                        address: addr,
+                        queue_position,
+                    }),
+                    source: MessageSource::WebsocketServer,
+                }).map_err(|err| format!("Failed to send message: {}", err)).unwrap();
+                Ok(())
+            }
         })
 }
 

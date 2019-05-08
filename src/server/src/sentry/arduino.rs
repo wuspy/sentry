@@ -84,12 +84,12 @@ impl Encoder for ArduinoCodec {
             Command::Move { pitch, yaw } => {
                 BigEndian::write_i32(&mut message[3..], (pitch * self.config.arduino.pitch_max_speed as f64) as i32);
                 BigEndian::write_i32(&mut message[7..], (yaw * self.config.arduino.yaw_max_speed as f64) as i32);
-            },
+            }
             Command::Home => {
                 BigEndian::write_u32(&mut message[3..], self.config.arduino.pitch_homing_speed);
                 BigEndian::write_u32(&mut message[7..], self.config.arduino.yaw_homing_speed);
-            },
-            _ => {},
+            }
+            _ => {}
         };
         let crc = crc16(&message[2..]);
         BigEndian::write_u16(&mut message[0..], crc);
@@ -153,7 +153,7 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
                     Ok(duration) if duration.as_millis() < 100 => {
                         warn!("Discarding arduino command due to rate-limiting");
                         return false;
-                    },
+                    }
                     _ => {}
                 }
 
