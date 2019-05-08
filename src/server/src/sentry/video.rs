@@ -204,9 +204,16 @@ fn get_tee(pipeline: &gst::Pipeline) -> Result<gst::Element, String> {
 }
 
 fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<(), String> {
+    let queue = get_client_queue(pipeline, client)?;
     let sink = get_client_sink(pipeline, client)?;
-    get_tee(pipeline)?.unlink(&sink);
-    pipeline.remove(&sink).map_err(|_| format!("Could not remove sink from pipeline"))?;
+    let tee = get_tee(pipeline)?;
+    tee.unlink(&queue);
+    queue.unlink(&sink);
+    pipeline.remove(&queue).map_err(|_| format!("Could not remove {} from pipeline", queue.get_name()))?;
+    pipeline.remove(&sink).map_err(|_| format!("Could not remove {} from pipeline", sink.get_name()))?;
+    queue
+        .set_state(gst::State::Null)
+        .map_err(|_| format!("Could not set {} to state Null", queue.get_name()))?;
     sink
         .set_state(gst::State::Null)
         .map_err(|_| format!("Could not set {} to state Null", sink.get_name()))?;
