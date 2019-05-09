@@ -1,6 +1,8 @@
 #include <Arduino.h>
+#include <TMC2130Stepper.h>
+
 #include "serialize.h"
-#include "motion.h"
+#include "config.h"
 #include "pins.h"
 #include "Command.h"
 #include "Status.h"
@@ -11,6 +13,18 @@ using namespace Sentry;
 StepperDriver pitch(PITCH_STEP_PIN, PITCH_DIR_PIN, PITCH_ENABLE_PIN, PITCH_INVERTED);
 StepperDriver yaw(YAW_STEP_PIN, YAW_DIR_PIN, YAW_ENABLE_PIN, YAW_INVERTED);
 StepperDriver slide(SLIDE_STEP_PIN, SLIDE_DIR_PIN, SLIDE_ENABLE_PIN, SLIDE_INVERTED);
+
+#ifdef PITCH_IS_TMC2130
+TMC2130Stepper pitchSpi(PITCH_CS_PIN);
+#endif
+
+#ifdef YAW_IS_TMC2130
+TMC2130Stepper yawSpi(YAW_CS_PIN);
+#endif
+
+#ifdef SLIDE_IS_TMC2130
+TMC2130Stepper slideSpi(SLIDE_CS_PIN);
+#endif
 
 const uint32_t BUFFER_LENGTH = 512;
 const uint32_t RX_MESSAGE_LENGTH = 11;
@@ -207,11 +221,13 @@ void fire(bool disable)
 
 void reload()
 {
-    reloading = true;
-    sendMessage();
-    openBreach(false);
-    closeBreach();
-    reloading = false;
+    if (!loaded) {
+        reloading = true;
+        sendMessage();
+        openBreach(false);
+        closeBreach();
+        reloading = false;
+    }
 }
 
 uint64_t timeDiff(uint64_t current, uint64_t previous)
@@ -230,16 +246,40 @@ void setup()
     pitch.setMaxSpeed(0);
     pitch.setAcceleration(PITCH_ACCEL);
     pitch.setEnabled(false);
+    #ifdef PITCH_IS_TMC2130
+    pitchSpi.begin();
+    pitchSpi.SilentStepStick2130(PITCH_CURRENT);
+    pitchSpi.hold_current(min(ceil(PITCH_HOLD_CURRENT / (float)PITCH_CURRENT * 31.0), 31));
+    pitchSpi.microsteps(PITCH_MICROSTEPS);
+    pitchSpi.interpolate(true);
+    pitchSpi.stealthChop(PITCH_STEALTHCHOP);
+    #endif
 
     yaw.setMaxSpeed(0);
     yaw.setAcceleration(YAW_ACCEL);
     yaw.setEnabled(false);
+    #ifdef YAW_IS_TMC2130
+    yawSpi.begin();
+    yawSpi.SilentStepStick2130(YAW_CURRENT);
+    yawSpi.hold_current(min(ceil(YAW_HOLD_CURRENT / (float)YAW_CURRENT * 31.0), 31));
+    yawSpi.microsteps(YAW_MICROSTEPS);
+    yawSpi.interpolate(true);
+    yawSpi.stealthChop(YAW_STEALTHCHOP);
+    #endif
 
     slide.setEnabled(false);
     slide.setAcceleration(SLIDE_ACCEL);
     slide.setMaxSpeed(SLIDE_SPEED);
     slide.setPosition(SLIDE_CLOSED_POS);
     slide.moveTo(SLIDE_CLOSED_POS);
+    #ifdef SLIDE_IS_TMC2130
+    slideSpi.begin();
+    slideSpi.SilentStepStick2130(SLIDE_CURRENT);
+    slideSpi.hold_current(min(ceil(SLIDE_HOLD_CURRENT / (float)SLIDE_CURRENT * 31.0), 31));
+    slideSpi.microsteps(SLIDE_MICROSTEPS);
+    slideSpi.interpolate(true);
+    slideSpi.stealthChop(SLIDE_STEALTHCHOP);
+    #endif
 
     ledOn();
     Serial.begin(115200);
