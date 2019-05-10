@@ -44,7 +44,7 @@ uint8_t ledBitmask;
 
 Status status = STATUS_MOTORS_OFF;
 bool loaded = true; // Safer to assume loaded when powered on
-bool breachOpen = false;
+bool magReleased = false;
 bool homed = false;
 bool homing = false;
 bool homing_failed = false;
@@ -178,7 +178,7 @@ void move(int32_t pitchSpeed, int32_t yawSpeed)
     yaw.moveTo(yawSpeed >= 0 ? YAW_MAX_STEPS : 0);
 }
 
-void openBreach(bool disable)
+void releaseMagazine(bool disable)
 {
     if (!loaded) {
         slide.setEnabled(true);
@@ -187,19 +187,19 @@ void openBreach(bool disable)
         if (disable) {
             slide.setEnabled(false);
         }
-        breachOpen = true;
+        magReleased = true;
     }
 }
 
-void closeBreach()
+void loadMagazine()
 {
-    if (breachOpen) {
+    if (magReleased) {
         slide.setEnabled(true);
         slide.moveTo(SLIDE_CLOSED_POS);
         slide.wait();
         slide.setEnabled(false);
         loaded = true;
-        breachOpen = false;
+        magReleased = false;
     }
 }
 
@@ -224,8 +224,8 @@ void reload()
     if (!loaded) {
         reloading = true;
         sendMessage();
-        openBreach(false);
-        closeBreach();
+        releaseMagazine(false);
+        loadMagazine();
         reloading = false;
     }
 }
@@ -323,11 +323,11 @@ void loop()
                             home(pitchSpeed, yawSpeed);
                         }
                         break;
-                    case COMMAND_OPEN_BREACH:
-                        openBreach(true);
+                    case COMMAND_RELEASE_MAGAZINE:
+                        releaseMagazine(true);
                         break;
-                    case COMMAND_CLOSE_BREACH:
-                        closeBreach();
+                    case COMMAND_LOAD_MAGAZINE:
+                        loadMagazine();
                         break;
                     case COMMAND_RELOAD:
                         reload();
@@ -386,8 +386,8 @@ void sendMessage() {
         status = STATUS_HOMING_REQUIRED;
     } else if (reloading) {
         status = STATUS_RELOADING;
-    } else if (breachOpen) {
-        status = STATUS_BREACH_OPEN;
+    } else if (magReleased) {
+        status = STATUS_MAGAZINE_RELEASED;
     } else if (!loaded) {
         status = STATUS_NOT_LOADED;
     }

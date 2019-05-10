@@ -40,7 +40,7 @@ impl Decoder for ArduinoCodec {
                     status: match message[2] {
                         100 => HardwareStatus::Ready,
                         101 => HardwareStatus::NotLoaded,
-                        102 => HardwareStatus::BreachOpen,
+                        102 => HardwareStatus::MagazineReleased,
                         103 => HardwareStatus::Reloading,
                         104 => HardwareStatus::HomingRequired,
                         105 => HardwareStatus::Homing,
@@ -72,8 +72,8 @@ impl Encoder for ArduinoCodec {
         message[2] = match item {
             Command::Move {..}              => 200,
             Command::Home                   => 201,
-            Command::OpenBreach             => 202,
-            Command::CloseBreach            => 203,
+            Command::ReleaseMagazine        => 202,
+            Command::LoadMagazine           => 203,
             Command::Reload                 => 204,
             Command::Fire                   => 205,
             Command::FireAndReload          => 206,

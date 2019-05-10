@@ -121,9 +121,9 @@ class MainActivity : Activity() {
             sendCommand(Command.HOME)
         }
 
-        breach_button.setOnClickListener {
+        mag_release_button.setOnClickListener {
             vibrateButtonPress()
-            sendCommand(if (sentryState == SentryState.BREACH_OPEN) Command.CLOSE_BREACH else Command.OPEN_BREACH)
+            sendCommand(if (sentryState == SentryState.MAGAZINE_RELEASED) Command.LOAD_MAGAZINE else Command.RELEASE_MAGAZINE)
         }
 
         reload_button.setOnClickListener {
@@ -377,7 +377,7 @@ class MainActivity : Activity() {
             val isActiveClient = connected && queuePosition == 0
             val menuOpen = menu.visibility == VISIBLE
             val canMove = isActiveClient && when (sentryState) {
-                SentryState.READY, SentryState.NOT_LOADED, SentryState.BREACH_OPEN -> true
+                SentryState.READY, SentryState.NOT_LOADED, SentryState.MAGAZINE_RELEASED -> true
                 else -> false
             }
 
@@ -385,12 +385,12 @@ class MainActivity : Activity() {
             joystick.isEnabled = joystick.visibility == View.VISIBLE
             fire_button.visibility = if (isActiveClient && !menuOpen && sentryState == SentryState.READY) VISIBLE else GONE
             home_button.visibility = if (isActiveClient && sentryState != SentryState.MOTORS_OFF) VISIBLE else GONE
-            breach_button.visibility = if (isActiveClient && (sentryState == SentryState.NOT_LOADED || sentryState == SentryState.BREACH_OPEN)) VISIBLE else GONE
+            mag_release_button.visibility = if (isActiveClient && (sentryState == SentryState.NOT_LOADED || sentryState == SentryState.MAGAZINE_RELEASED)) VISIBLE else GONE
             reload_button.visibility = if (isActiveClient && sentryState == SentryState.NOT_LOADED) VISIBLE else GONE
             motors_button.visibility = if (isActiveClient) VISIBLE else GONE
 
             motors_button.text = if (sentryState == SentryState.MOTORS_OFF) "Turn Motors On" else "Turn Motors Off"
-            breach_button.text = if (sentryState == SentryState.BREACH_OPEN) "Close Breach" else "Open Breach"
+            mag_release_button.text = if (sentryState == SentryState.MAGAZINE_RELEASED) "Load Magazine" else "Magazine Release"
         }
     }
 

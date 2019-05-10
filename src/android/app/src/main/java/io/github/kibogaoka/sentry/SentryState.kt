@@ -3,7 +3,7 @@ package io.github.kibogaoka.sentry
 enum class SentryState {
     READY,
     NOT_LOADED,
-    BREACH_OPEN,
+    MAGAZINE_RELEASED,
     RELOADING,
     HOMING_REQUIRED,
     HOMING,

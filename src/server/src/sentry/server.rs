@@ -145,7 +145,7 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                         "status": match status {
                             HardwareStatus::Ready => "ready",
                             HardwareStatus::NotLoaded => "not_loaded",
-                            HardwareStatus::BreachOpen => "breach_open",
+                            HardwareStatus::MagazineReleased => "magazine_released",
                             HardwareStatus::Reloading => "reloading",
                             HardwareStatus::HomingRequired => "homing_required",
                             HardwareStatus::Homing => "homing",
@@ -274,8 +274,8 @@ fn process_message(message: String) -> Option<MessageContent> {
         if let JsonString(command) = &json["command"] {
             match command.as_str() {
                 "fire" => Some(MessageContent::Command(Command::Fire)),
-                "open_breach" => Some(MessageContent::Command(Command::OpenBreach)),
-                "close_breach" => Some(MessageContent::Command(Command::CloseBreach)),
+                "release_magazine" => Some(MessageContent::Command(Command::ReleaseMagazine)),
+                "load_magazine" => Some(MessageContent::Command(Command::LoadMagazine)),
                 "reload" => Some(MessageContent::Command(Command::Reload)),
                 "fire_and_reload" => Some(MessageContent::Command(Command::FireAndReload)),
                 "home" => Some(MessageContent::Command(Command::Home)),
