@@ -19,6 +19,8 @@ import android.view.View.*
 import android.widget.CompoundButton
 import android.widget.SeekBar
 import java.lang.IllegalArgumentException
+import java.util.*
+import kotlin.concurrent.scheduleAtFixedRate
 
 class MainActivity : Activity() {
 
@@ -53,6 +55,7 @@ class MainActivity : Activity() {
     private var reloadAfterFiring = false
     private var invertY = false
     private var invertX = false
+    private var pingTimer = Timer()
     private lateinit var preferences: SharedPreferences
     private lateinit var placeholderVideoCommand: String
 
@@ -162,6 +165,10 @@ class MainActivity : Activity() {
             invertX = b
         }
 
+        pingTimer.scheduleAtFixedRate(0, 500) {
+            tx?.println("\"ping\"")
+        }
+
         updateUi()
     }
 
@@ -245,6 +252,11 @@ class MainActivity : Activity() {
                                     udpsrc port=${holePuncher.boundPort!!} !
                                     ${command!!}
                                 """)
+                                updateUi()
+                            }
+                            json.has("video_error") -> {
+                                holePuncher.stop()
+                                videoError = json.getJSONObject("video_error").getString("message")!!
                                 updateUi()
                             }
                             json.has("queue_position") -> {
