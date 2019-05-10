@@ -127,6 +127,19 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                         }
                     }).to_string());
                 }
+                MessageContent::VideoError { message, for_client } => {
+                    let json = json!({
+                        "video_error": {
+                            "message": message,
+                        }
+                    }).to_string();
+
+                    if let Some(client) = for_client {
+                        clients.write().unwrap().send(client, json);
+                    } else {
+                        clients.write().unwrap().send_to_all(json);
+                    }
+                }
                 MessageContent::HardwareState { pitch_pos, yaw_pos, status } => {
                     clients.write().unwrap().send_to_all(json!({
                         "status": match status {

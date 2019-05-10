@@ -71,6 +71,10 @@ pub enum MessageContent {
     VideoStreaming {
         for_client: SocketAddr,
     },
+    VideoError {
+        message: String,
+        for_client: Option<SocketAddr>,
+    },
     Command (Command),
     ClientConnected (Client),
     ClientDisconnected (Client),

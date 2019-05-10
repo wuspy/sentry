@@ -14,6 +14,7 @@ use tokio::net::UdpSocket;
 use tokio::prelude::*;
 use rand::prelude::*;
 use std::collections::HashMap;
+use crate::sentry::MessageContent::VideoError;
 
 struct UdpHandshakeComplete {
     server_addr: SocketAddr,
@@ -104,7 +105,7 @@ impl Future for UdpHandshake {
     }
 }
 
-pub fn find_camera_device(properties: &HashMap<String, String>) -> Option<String> {
+fn find_camera_device(properties: &HashMap<String, String>) -> Option<String> {
     for device in fs::read_dir("/dev").ok()?
         .into_iter()
         .filter_map(|entry| entry.ok())
@@ -141,75 +142,69 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     gst::init().map_err(|err| format!("Could not initialize GStreamer: {}", err))?;
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
-
-    let device = find_camera_device(&config.camera)
-        .ok_or(format!("Failed to find camera device matching properties {:?}", config.camera))?;
-    info!("Found camera device {}", device);
-    let command = format!(
-        "v4l2src device={} ! {} ! tee name=tee allow-not-linked=true",
-        device,
-        config.video.encoder.as_str()
-    );
-    let main_loop = glib::MainLoop::new(None, false);
-
-    info!("Creating pipeline with \"{}\"", command);
-    let pipeline = gst::parse_launch(command.as_str())
-        .map_err(|err| format!("Failed to parse gstreamer command \"{}\": {}", command, err))?
-        .dynamic_cast::<gst::Pipeline>()
-        .unwrap();
-
-    let bus = pipeline.get_bus().ok_or(format!("Could not get bus for pipeline"))?;
-    bus.add_watch({
-        let pipeline = pipeline.clone();
-        move |_, msg| {
-            use gst::message::MessageView;
-            match msg.view() {
-                MessageView::Error(err) => {
-                    error!("Gstreamer: Error from {}: {} {}",
-                           err.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
-                           err.get_error(),
-                           err.get_debug().unwrap_or("?".to_owned()));
-                    panic!();
-                }
-                MessageView::Warning(warning) => {
-                    error!("Gstreamer: Warning from {}: {} {}",
-                           warning.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
-                           warning.get_error(),
-                           warning.get_debug().unwrap_or("?".to_owned()));
-                }
-                MessageView::StateChanged(state) => {
-                    if state.get_src().map(|s| s == pipeline).unwrap_or(false) {
-                        info!("Gstreamer: state changed to {:?}", state.get_current());
-                    }
-                }
-                _ => {}
-            };
-
-            glib::Continue(true)
-        }
-    });
-
-    thread::spawn(move || {
-        main_loop.run();
-    });
+    let mut pipeline: Option<gst::Pipeline> = None;
 
     tokio::spawn(in_message_stream
-        .map_err(|_| ())
         .for_each(move |message| {
             match message.content {
                 MessageContent::ClientConnected(client) => {
-                    tokio::spawn(
-                        handle_new_client(
-                            pipeline.clone(),
+                    let pipeline = match pipeline.clone() {
+                        Some(pipeline) => pipeline,
+                        None => match create_pipeline(config.clone(), out_message_sink.clone()) {
+                            Ok(new_pipeline) => {
+                                pipeline.replace(new_pipeline.clone());
+                                new_pipeline
+                            }
+                            Err(err) => {
+                                error!("Error creating pipeline: {}", err);
+                                out_message_sink.unbounded_send(Message {
+                                    content: VideoError {
+                                        message: err,
+                                        for_client: None,
+                                    },
+                                    source: MessageSource::VideoServer,
+                                });
+                                return Err(());
+                            }
+                        }
+                    };
+
+                    tokio::spawn({
+                        let out_message_sink = out_message_sink.clone();
+                        add_client_sink(
+                            pipeline,
                             config.clone(),
                             client.clone(),
                             out_message_sink.clone()
-                        ).map_err(move |err| error!("Error adding video sink for {}: {}", client.address, err))
-                    );
+                        ).map_err(move |err| {
+                            error!("Error adding video sink for {}: {}", client.address, err);
+                            out_message_sink.unbounded_send(Message {
+                                content: VideoError {
+                                    message: err,
+                                    for_client: Some(client.address),
+                                },
+                                source: MessageSource::VideoServer,
+                            });
+                        })
+                    });
                 }
                 MessageContent::ClientDisconnected(client) => {
-                    handle_dropped_client(&pipeline, &client)
-                        .map_err(move|err| error!("Error dropping video sink for {}: {}", client.address, err));
+                    if let Some(active_pipeline) = &pipeline {
+                        if let Err(err) = drop_client_sink(active_pipeline, &client) {
+                            error!("Error dropping video sink for {}: {}", client.address, err);
+                        }
+                        if active_pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
+                            // There are no more sinks, so stop the pipeline
+                            info!("Dropping gstreamer pipeline");
+                            match active_pipeline.get_bus() {
+                                Some(bus) => if let Err(err) = bus.post(&gst::Message::new_eos().build()) {
+                                    error!("Could not post EOS message to pipeline bus");
+                                }
+                                None => error!("Could not get bus for pipeline")
+                            }
+                            pipeline.take();
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -218,6 +213,79 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     );
 
     Ok((in_message_sink, out_message_stream))
+}
+
+fn create_pipeline(config: Config, out_message_sink: UnboundedSender<Message>) -> Result<gst::Pipeline, String> {
+    info!("Creating gstreamer pipeline");
+    let device = find_camera_device(&config.camera)
+        .ok_or(format!("Failed to find camera device matching properties {:?}", config.camera))?;
+    info!("Found camera device {}", device);
+    let command = format!(
+        "v4l2src device={} ! {} ! tee name=tee allow-not-linked=true",
+        device,
+        config.video.encoder.as_str()
+    );
+
+    info!("Creating pipeline with \"{}\"", command);
+    let pipeline = gst::parse_launch(command.as_str())
+        .map_err(|err| format!("Failed to parse gstreamer command \"{}\": {}", command, err))?
+        .dynamic_cast::<gst::Pipeline>()
+        .unwrap();
+
+    // TODO this can block for quite some time. Make this function return a future.
+    pipeline
+        .set_state(gst::State::Playing)
+        .map_err(|_| format!("Could not set pipeline to state Playing"))?;
+
+    let bus = pipeline.get_bus().ok_or(format!("Could not get bus for pipeline"))?;
+    thread::spawn({
+        let pipeline = pipeline.clone();
+        move || {
+            use gst::message::MessageView;
+            for msg in bus.iter_timed(gst::CLOCK_TIME_NONE) {
+                match msg.view() {
+                    MessageView::Eos(..) => {
+                        info!("Gstreamer: EOS");
+                        break;
+                    },
+                    MessageView::Error(err) => {
+                        error!("Gstreamer: Error from {}: {} {}",
+                               err.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
+                               err.get_error(),
+                               err.get_debug().unwrap_or("?".to_owned()));
+                        out_message_sink.unbounded_send(Message {
+                            content: VideoError {
+                                message: err.get_error().to_string(),
+                                for_client: None,
+                            },
+                            source: MessageSource::VideoServer,
+                        });
+                        break;
+                    }
+                    MessageView::Warning(warning) => {
+                        warn!("Gstreamer: Warning from {}: {} {}",
+                              warning.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
+                              warning.get_error(),
+                              warning.get_debug().unwrap_or("?".to_owned()));
+                    }
+                    MessageView::StateChanged(state) => {
+                        if state.get_src().map(|s| s == pipeline).unwrap_or(false) {
+                            info!("Gstreamer: pipeline state changed to {:?}", state.get_current());
+                        } else {
+                            debug!("Gstreamer: {} state changed to {:?}", state.get_src().unwrap().get_name(), state.get_current());
+                        }
+                    }
+                    _ => {}
+                };
+            }
+
+            pipeline
+                .set_state(gst::State::Null)
+                .map_err(|_| error!("Could not set pipeline to state Null"));
+        }
+    });
+
+    Ok(pipeline)
 }
 
 fn get_client_queue_name(client: &Client) -> String {
@@ -246,7 +314,7 @@ fn get_tee(pipeline: &gst::Pipeline) -> Result<gst::Element, String> {
         .ok_or(format!("Could not find element tee"))
 }
 
-fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<(), String> {
+fn drop_client_sink(pipeline: &gst::Pipeline, client: &Client) -> Result<(), String> {
     let queue = get_client_queue(pipeline, client)?;
     let sink = get_client_sink(pipeline, client)?;
     let tee = get_tee(pipeline)?;
@@ -261,27 +329,21 @@ fn handle_dropped_client(pipeline: &gst::Pipeline, client: &Client) -> Result<()
         .set_state(gst::State::Null)
         .map_err(|_| format!("Could not set {} to state Null", sink.get_name()))?;
 
-    if pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
-        // There are no more sinks, so stop the pipeline
-        pipeline
-            .set_state(gst::State::Null)
-            .map_err(|_| format!("Could not set pipeline to state Null"))?;
-
-    }
     Ok(())
 }
 
-fn handle_new_client(
+fn add_client_sink(
     pipeline: gst::Pipeline,
     config: Config,
     client: Client,
     out_message_sink: UnboundedSender<Message>
 ) -> impl Future<Item=(), Error=String> {
+    info!("Starting UDP handshake with client {}", client.address);
     match UdpHandshake::begin(&config, &client, out_message_sink.clone()) {
         Err(err) => future::Either::A(future::err(err)),
         Ok(handshake) => future::Either::B(handshake
             .and_then(move |handshake: UdpHandshakeComplete| {
-                info!("UDP handshake succeeded for client {}", client.address);
+                info!("Adding gstreamer sink for client {}", client.address);
                 let queue = gst::ElementFactory::make("queue", get_client_queue_name(&client).as_str())
                     .ok_or(format!("Could not create queue element"))?;
                 let sink = gst::ElementFactory::make("udpsink", get_client_sink_name(&client).as_str())
@@ -298,18 +360,18 @@ fn handle_new_client(
                     .map_err(|_| format!("Could not add {} to pipeline", queue.get_name()))?;
                 pipeline.add(&sink)
                     .map_err(|_| format!("Could not add {} to pipeline", sink.get_name()))?;
-
                 tee
                     .link(&queue)
                     .map_err(|_| format!("Could not link {} to {}", tee.get_name(), queue.get_name()))?;
                 queue
                     .link(&sink)
                     .map_err(|_| format!("Could not link {} to {}", queue.get_name(), sink.get_name()))?;
-
-                // Make sure the pipeline is playing
-                pipeline
-                    .set_state(gst::State::Playing)
-                    .map_err(|_| format!("Could not set pipeline to state Playing"))?;
+                queue
+                    .sync_state_with_parent()
+                    .map_err(|_| format!("Could not sync state on {}", queue.get_name()))?;
+                sink
+                    .sync_state_with_parent()
+                    .map_err(|_| format!("Could not sync state on {}", sink.get_name()))?;
 
                 Ok(())
             })
