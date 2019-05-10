@@ -74,6 +74,7 @@ pub enum MessageContent {
     Command (Command),
     ClientConnected (Client),
     ClientDisconnected (Client),
+    Ping,
 }
 
 #[derive(Clone)]

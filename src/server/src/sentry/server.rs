@@ -2,13 +2,16 @@ use tokio::reactor::Handle;
 use std::net::{SocketAddr, IpAddr};
 use std::str::FromStr;
 use serde_json::json;
-use std::sync::{RwLock, Arc};
+use std::sync::{RwLock, Arc, Mutex};
 use crate::sentry::{Command, Message, Client, MessageContent, MessageSource, StartResult, UnboundedChannel, HardwareStatus};
 use tokio::prelude::*;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
 use crate::sentry::config::Config;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::codec::{LinesCodec, Decoder};
+use std::time::{SystemTime, Instant, Duration};
+use std::cell::{Cell};
+use tokio::timer::Interval;
 
 struct ClientTx {
     address: SocketAddr,
@@ -160,6 +163,7 @@ fn handle_client(
     let (client_sink, client_source) = LinesCodec::new().framed(socket).split();
     let (proxy_tx, proxy_rx) = unbounded::<String>();
     let queue_position = clients.write().unwrap().enqueue(addr, proxy_tx);
+    let mut last_message_time = Arc::new(Mutex::new(Cell::new(SystemTime::now())));
 
     info!("Client {} has connected", addr);
 
@@ -199,8 +203,33 @@ fn handle_client(
                 }
             }
         })
+        .inspect({
+            let mut last_message_time = last_message_time.clone();
+            move |_| {
+                last_message_time.lock().unwrap().replace(SystemTime::now());
+            }
+        })
         // Forward all of this client's messages to the server channel
         .forward(out_message_sink.clone().sink_map_err(|_| ()))
+        .map(|_| ())
+        // Start a watchdog to check last_message_time
+        .select(Interval::new(Instant::now(), Duration::from_secs(1))
+            .take_while({
+                let mut last_message_time = last_message_time.clone();
+                move |_| {
+                    Ok(match last_message_time.lock().unwrap().get().elapsed() {
+                        Ok(duration) => duration.as_secs() < 3,
+                        _ => true
+                    })
+                }
+            })
+            .fold((),|_, _| Ok(()))
+            .map_err(|_| ())
+            .and_then(move |_| {
+                warn!("Dropping client {} because they have been inactive for 3 seconds", addr);
+                Ok(())
+            })
+        )
         .and_then({
             let clients = clients.clone();
             move |_| {
@@ -221,6 +250,8 @@ fn handle_client(
                 Ok(())
             }
         })
+        .map(|_| ())
+        .map_err(|_| ())
 }
 
 fn process_message(message: String) -> Option<MessageContent> {
@@ -247,6 +278,8 @@ fn process_message(message: String) -> Option<MessageContent> {
                 pitch: pitch.as_f64()?,
                 yaw: yaw.as_f64()?,
             }))
+        } else if JsonString("ping".to_string()) == json {
+            Some(MessageContent::Ping)
         } else {
             None
         }
