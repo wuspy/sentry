@@ -11,7 +11,6 @@ extern crate byteorder;
 
 use std::net::SocketAddr;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
-use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug)]
 pub enum Command {

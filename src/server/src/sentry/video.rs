@@ -1,4 +1,3 @@
-use std::prelude::*;
 use std::fs;
 use std::process;
 use gstreamer::prelude::*;
@@ -8,10 +7,9 @@ use futures::future;
 use futures::sync::mpsc::{UnboundedSender, unbounded};
 use crate::sentry::{Message, StartResult, UnboundedChannel, MessageContent, Client, MessageSource};
 use crate::sentry::config::Config;
-use std::net::{SocketAddr, IpAddr};
+use std::net::SocketAddr;
 use std::thread;
 use tokio::net::UdpSocket;
-use tokio::prelude::*;
 use rand::prelude::*;
 use std::collections::HashMap;
 use crate::sentry::MessageContent::VideoError;
@@ -49,7 +47,9 @@ impl UdpHandshake {
                 rtp_address: local_addr,
             },
             source: MessageSource::VideoServer,
-        });
+        }).unwrap_or_else(|err|
+            error!("Failed to send bus message: {}", err)
+        );
 
         Ok(UdpHandshake {
             socket: Some(socket),
@@ -93,7 +93,9 @@ impl Future for UdpHandshake {
                         for_client: self.client_addr,
                     },
                     source: MessageSource::VideoServer,
-                });
+                }).unwrap_or_else(|err|
+                    error!("Failed to send bus message: {}", err)
+                );
                 Ok(futures::Async::Ready(UdpHandshakeComplete {
                     server_addr: self.local_addr,
                     client_addr,
@@ -142,33 +144,13 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     gst::init().map_err(|err| format!("Could not initialize GStreamer: {}", err))?;
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
-    let mut pipeline: Option<gst::Pipeline> = None;
+    let pipeline = create_pipeline(config.clone(), out_message_sink.clone())?;
 
     tokio::spawn(in_message_stream
         .for_each(move |message| {
             match message.content {
                 MessageContent::ClientConnected(client) => {
-                    let pipeline = match pipeline.clone() {
-                        Some(pipeline) => pipeline,
-                        None => match create_pipeline(config.clone(), out_message_sink.clone()) {
-                            Ok(new_pipeline) => {
-                                pipeline.replace(new_pipeline.clone());
-                                new_pipeline
-                            }
-                            Err(err) => {
-                                error!("Error creating pipeline: {}", err);
-                                out_message_sink.unbounded_send(Message {
-                                    content: VideoError {
-                                        message: err,
-                                        for_client: None,
-                                    },
-                                    source: MessageSource::VideoServer,
-                                });
-                                return Err(());
-                            }
-                        }
-                    };
-
+                    let pipeline = pipeline.clone();
                     tokio::spawn({
                         let out_message_sink = out_message_sink.clone();
                         add_client_sink(
@@ -184,26 +166,15 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
                                     for_client: Some(client.address),
                                 },
                                 source: MessageSource::VideoServer,
-                            });
+                            }).unwrap_or_else(|err|
+                                error!("Failed to send bus message: {}", err)
+                            );
                         })
                     });
                 }
                 MessageContent::ClientDisconnected(client) => {
-                    if let Some(active_pipeline) = &pipeline {
-                        if let Err(err) = drop_client_sink(active_pipeline, &client) {
-                            error!("Error dropping video sink for {}: {}", client.address, err);
-                        }
-                        if active_pipeline.iterate_elements().find(|element| element.get_name().starts_with("sink")) == None {
-                            // There are no more sinks, so stop the pipeline
-                            info!("Dropping gstreamer pipeline");
-                            match active_pipeline.get_bus() {
-                                Some(bus) => if let Err(err) = bus.post(&gst::Message::new_eos().build()) {
-                                    error!("Could not post EOS message to pipeline bus");
-                                }
-                                None => error!("Could not get bus for pipeline")
-                            }
-                            pipeline.take();
-                        }
+                    if let Err(err) = drop_client_sink(&pipeline, &client) {
+                        error!("Error dropping video sink for {}: {}", client.address, err);
                     }
                 }
                 _ => {}
@@ -232,10 +203,9 @@ fn create_pipeline(config: Config, out_message_sink: UnboundedSender<Message>) -
         .dynamic_cast::<gst::Pipeline>()
         .unwrap();
 
-    // TODO this can block for quite some time. Make this function return a future.
     pipeline
         .set_state(gst::State::Playing)
-        .map_err(|_| format!("Could not set pipeline to state Playing"))?;
+        .map_err(|err| format!("Failed to set pipeline to state Playing: {}", err))?;
 
     let bus = pipeline.get_bus().ok_or(format!("Could not get bus for pipeline"))?;
     thread::spawn({
@@ -247,7 +217,7 @@ fn create_pipeline(config: Config, out_message_sink: UnboundedSender<Message>) -
                     MessageView::Eos(..) => {
                         info!("Gstreamer: EOS");
                         break;
-                    },
+                    }
                     MessageView::Error(err) => {
                         error!("Gstreamer: Error from {}: {} {}",
                                err.get_src().map(|s| s.get_name().to_owned()).unwrap_or("?".to_owned()),
@@ -259,7 +229,9 @@ fn create_pipeline(config: Config, out_message_sink: UnboundedSender<Message>) -
                                 for_client: None,
                             },
                             source: MessageSource::VideoServer,
-                        });
+                        }).unwrap_or_else(|err|
+                            error!("Failed to send bus message: {}", err)
+                        );
                         break;
                     }
                     MessageView::Warning(warning) => {
@@ -279,9 +251,9 @@ fn create_pipeline(config: Config, out_message_sink: UnboundedSender<Message>) -
                 };
             }
 
-            pipeline
-                .set_state(gst::State::Null)
-                .map_err(|_| error!("Could not set pipeline to state Null"));
+            if pipeline.set_state(gst::State::Null).is_err() {
+                error!("Could not set pipeline to state Null");
+            }
         }
     });
 
@@ -367,11 +339,11 @@ fn add_client_sink(
                     .link(&sink)
                     .map_err(|_| format!("Could not link {} to {}", queue.get_name(), sink.get_name()))?;
                 queue
-                    .sync_state_with_parent()
-                    .map_err(|_| format!("Could not sync state on {}", queue.get_name()))?;
+                    .set_state(gst::State::Playing)
+                    .map_err(|_| format!("Could not set {} to state Playing", queue.get_name()))?;
                 sink
-                    .sync_state_with_parent()
-                    .map_err(|_| format!("Could not sync state on {}", sink.get_name()))?;
+                    .set_state(gst::State::Playing)
+                    .map_err(|_| format!("Could not set {} to state Playing", sink.get_name()))?;
 
                 Ok(())
             })

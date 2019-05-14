@@ -9,22 +9,15 @@ extern crate tokio;
 extern crate toml;
 extern crate gstreamer as gst;
 
-use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use future::lazy;
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use simplelog::{TermLogger, LevelFilter, Config as LogConfig};
-use std::prelude::*;
-use std::fs;
-use crate::sentry::*;
-use std::net::{SocketAddr, IpAddr};
-use std::str::FromStr;
-
-use serde_json::json;
+use simplelog::{TermLogger, LevelFilter, Config as LogConfig, CombinedLogger, WriteLogger, SharedLogger};
+use std::env;
 
 mod sentry;
 use sentry::StartResult;
-use sentry::config::Config;
+use std::fs::File;
 
 /// Broadcasts one receiver to a list of senders
 macro_rules! broadcast {
@@ -38,7 +31,11 @@ macro_rules! broadcast {
             .map_err(|_| ())
             .for_each(move |message| {
                 senders.iter().for_each(|sender| {
-                    sender.unbounded_send(message.clone());
+                    sender
+                        .unbounded_send(message.clone())
+                        .unwrap_or_else(|err| {
+                            error!("Failed to send message on bus: {}", err);
+                        });
                 });
                 Ok(())
             })
@@ -47,7 +44,18 @@ macro_rules! broadcast {
 }
 
 fn main() {
-    TermLogger::init(LevelFilter::Info, LogConfig::default()).unwrap();
+    let mut log_path = env::current_exe().expect("Cannot get executable path");
+    log_path.pop();
+    log_path.push("sentry.log");
+    let log_path = log_path.to_str().unwrap();
+    let mut loggers = Vec::<Box<SharedLogger>>::new();
+    if let Ok(log_file) = File::create(log_path) {
+        loggers.push(WriteLogger::new(LevelFilter::Info, LogConfig::default(), log_file));
+    }
+    if let Some(term_logger) = TermLogger::new(LevelFilter::Info, LogConfig::default()) {
+        loggers.push(term_logger);
+    }
+    CombinedLogger::init(loggers).expect("Cannot initialize logging");
 
     let runtime = Runtime::new().unwrap();
     tokio::run(lazy(move || {
@@ -55,13 +63,14 @@ fn main() {
             Ok(()) => Ok(()),
             Err(err) => {
                 error!("{}", err);
-                panic!("{}", err);
+                Err(())
             },
         }
     }));
 }
 
 fn run(runtime: Runtime) -> StartResult<()> {
+    #[allow(deprecated)]
     let reactor = runtime.reactor();
     let config = sentry::config::load()?;
     let (server_tx, server_rx) = sentry::server::start(config.clone())?;

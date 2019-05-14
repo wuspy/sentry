@@ -1,6 +1,5 @@
 use std::fs;
 use std::env;
-use std::prelude::*;
 use crate::sentry::StartResult;
 use std::collections::HashMap;
 

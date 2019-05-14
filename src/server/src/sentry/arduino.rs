@@ -1,19 +1,16 @@
 use std::time::{Duration, SystemTime};
-use std::mem;
 use std::io;
-use byteorder::{BigEndian, LittleEndian, ByteOrder};
+use byteorder::{BigEndian, ByteOrder};
 use tokio::codec::{Decoder, Encoder};
 use tokio::reactor::Handle;
 use bytes::{BytesMut, BufMut};
-use tokio_serial::{Serial, SerialPort, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
+use tokio_serial::{Serial, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
 use futures::{Stream, Sink};
 use tokio::prelude::*;
 use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource, StartResult, UnboundedChannel};
-use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
+use futures::sync::mpsc::unbounded;
 use crc::crc16::checksum_usb as crc16;
 use crate::sentry::config::Config;
-use std::sync::Mutex;
-use crate::sentry::MessageContent::HardwareState;
 
 struct ArduinoCodec {
     config: Config,
@@ -144,7 +141,7 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
                 }
             }
         })
-        .filter(move |command| {
+        .filter(move |_| {
             // Rate-limit the amount of commands we get to prevent straining the serial connection
             message_count += 1;
             if message_count >= 10 {

@@ -1,11 +1,9 @@
-use tokio::reactor::Handle;
-use std::net::{SocketAddr, IpAddr};
-use std::str::FromStr;
+use std::net::SocketAddr;
 use serde_json::json;
 use std::sync::{RwLock, Arc, Mutex};
 use crate::sentry::{Command, Message, Client, MessageContent, MessageSource, StartResult, UnboundedChannel, HardwareStatus};
 use tokio::prelude::*;
-use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver, unbounded};
+use futures::sync::mpsc::{UnboundedSender, unbounded};
 use crate::sentry::config::Config;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::codec::{LinesCodec, Decoder};
@@ -19,16 +17,18 @@ struct ClientTx {
 }
 
 pub struct ClientQueue {
-    config: Config,
     clients: Vec<ClientTx>,
 }
 
 impl ClientQueue {
-    fn new(config: Config) -> Self {
+    fn new() -> Self {
         ClientQueue {
-            config,
             clients: Vec::new(),
         }
+    }
+
+    fn len(&self) -> usize {
+        self.clients.len()
     }
 
     fn enqueue(&mut self, address: SocketAddr, tx: UnboundedSender<String>) -> usize {
@@ -41,10 +41,11 @@ impl ClientQueue {
         for i in 0..self.clients.len() {
             if self.clients[i].address == client {
                 self.clients.remove(i);
-                break;
+                self.send_client_states();
+                return;
             }
         }
-        self.send_client_states();
+        error!("Attempted to remove client {}, but they are not in the queue", client);
     }
 
     pub fn index_of(&self, client: SocketAddr) -> Option<usize> {
@@ -53,22 +54,27 @@ impl ClientQueue {
 
     pub fn send(&mut self, client: SocketAddr, message: String) {
         if let Some(client) = self.clients.iter().find(|c| c.address == client) {
-            client.tx.unbounded_send(message);
+            if let Err(err) = client.tx.unbounded_send(message) {
+                error!("Failed to send message to client {}: {}", client.address, err);
+                warn!("Removing client {} from queue due to previous error", client.address);
+                self.remove(client.address);
+            }
         } else {
             error!("Attempted to send message to invalid client address {}", client);
         }
     }
 
     pub fn send_to_all(&mut self, message: String) {
-        for client in self.clients.iter() {
-            client.tx.unbounded_send(message.to_owned());
+        let len = self.clients.len();
+        for i in 0..len {
+            self.send(self.clients[i].address, message.to_owned());
         }
     }
 
     pub fn send_client_states(&mut self) {
         let len = self.clients.len();
         for i in 0..len {
-            self.clients[i].tx.unbounded_send(json!({
+            self.send(self.clients[i].address, json!({
                 "queue_position": i,
                 "num_clients": len,
             }).to_string());
@@ -79,11 +85,11 @@ impl ClientQueue {
 pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
     let (in_message_sink, in_message_stream) = unbounded::<Message>();
     let (out_message_sink, out_message_stream) = unbounded::<Message>();
-    let clients = Arc::new(RwLock::new(ClientQueue::new(config.clone())));
+    let clients = Arc::new(RwLock::new(ClientQueue::new()));
     let addr = SocketAddr::new(config.server.host.as_str().parse().unwrap(), config.server.port);
 
     info!("Binding TCP server on {}...", addr);
-    let mut listener = TcpListener::bind(&addr)
+    let listener = TcpListener::bind(&addr)
         .map_err(|err| format!("Could not bind TCP server: {}", err))?;
 
     info!("TCP server running");
@@ -95,12 +101,11 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
             error!("TCP client connection error: {}", err);
         })
         .for_each({
-            let config = config.clone();
             let clients = clients.clone();
             move |socket| {
                 info!("Incoming TCP connection from {}", socket.peer_addr().unwrap());
                 tokio::spawn(
-                    handle_client(socket, config.clone(), out_message_sink.clone(), clients.clone())
+                    handle_client(socket, out_message_sink.clone(), clients.clone())
                 );
                 Ok(())
             }
@@ -168,7 +173,6 @@ pub fn start(config: Config) -> StartResult<UnboundedChannel<Message>> {
 
 fn handle_client(
     socket: TcpStream,
-    config: Config,
     out_message_sink: UnboundedSender<Message>,
     clients: Arc<RwLock<ClientQueue>>
 ) -> impl Future<Item=(), Error=()> {
@@ -176,9 +180,9 @@ fn handle_client(
     let (client_sink, client_source) = LinesCodec::new().framed(socket).split();
     let (proxy_tx, proxy_rx) = unbounded::<String>();
     let queue_position = clients.write().unwrap().enqueue(addr, proxy_tx);
-    let mut last_message_time = Arc::new(Mutex::new(Cell::new(SystemTime::now())));
+    let last_message_time = Arc::new(Mutex::new(Cell::new(SystemTime::now())));
 
-    info!("Client {} has connected", addr);
+    info!("Client {} has connected ({} total clients)", addr, clients.read().unwrap().len());
 
     // Send a message on the server channel notifying the client has connected
     out_message_sink.unbounded_send(Message {
@@ -197,7 +201,14 @@ fn handle_client(
     );
 
     client_source
-        .map_err(|_| ())
+        .map_err({
+            let clients = clients.clone();
+            move |err| {
+                error!("Error starting receiver for client {}: {}", addr, err);
+                warn!("Removing client {} from queue due to previous error", addr);
+                clients.write().unwrap().remove(addr);
+            }
+        })
         // Parse client messages to Message structs
         .filter_map({
             let clients = clients.clone();
@@ -217,7 +228,7 @@ fn handle_client(
             }
         })
         .inspect({
-            let mut last_message_time = last_message_time.clone();
+            let last_message_time = last_message_time.clone();
             move |_| {
                 last_message_time.lock().unwrap().replace(SystemTime::now());
             }
@@ -228,27 +239,38 @@ fn handle_client(
         // Start a watchdog to check last_message_time
         .select(Interval::new(Instant::now(), Duration::from_secs(1))
             .take_while({
-                let mut last_message_time = last_message_time.clone();
+                let last_message_time = last_message_time.clone();
+                let clients = clients.clone();
                 move |_| {
-                    Ok(match last_message_time.lock().unwrap().get().elapsed() {
-                        Ok(duration) => duration.as_secs() < 3,
-                        _ => true
+                    Ok(match clients.read().unwrap().index_of(addr) {
+                        Some(_) => match last_message_time.lock().unwrap().get().elapsed() {
+                            Ok(duration) => if duration.as_secs() < 3 {
+                                true
+                            } else {
+                                warn!("Dropping client {} because they have been inactive for 3 seconds", addr);
+                                false
+                            }
+                            _ => {
+                                error!("Could not get time since last message for client {}", addr);
+                                true
+                            }
+                        }
+                        None => {
+                            warn!("Dropping receiver for client {} because they have been removed from the queue", addr);
+                            false
+                        }
                     })
                 }
             })
             .fold((),|_, _| Ok(()))
             .map_err(|_| ())
-            .and_then(move |_| {
-                warn!("Dropping client {} because they have been inactive for 3 seconds", addr);
-                Ok(())
-            })
         )
         .and_then({
             let clients = clients.clone();
             move |_| {
                 // Send a message on the server channel notifying the client is disconnected
-                info!("Client {} has disconnected", addr);
                 let mut clients = clients.write().unwrap();
+                info!("Client {} has disconnected ({} total clients)", addr, clients.len());
                 let queue_position = clients
                     .index_of(addr)
                     .unwrap_or(std::usize::MAX);
@@ -268,7 +290,7 @@ fn handle_client(
 }
 
 fn process_message(message: String) -> Option<MessageContent> {
-    use serde_json::Value::{String as JsonString, Number as JsonNumber, Object as JsonObject};
+    use serde_json::Value::{String as JsonString, Number as JsonNumber};
 
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(message.as_str()) {
         if let JsonString(command) = &json["command"] {
@@ -281,7 +303,7 @@ fn process_message(message: String) -> Option<MessageContent> {
                 "home" => Some(MessageContent::Command(Command::Home)),
                 "motors_on" => Some(MessageContent::Command(Command::MotorsOn)),
                 "motors_off" => Some(MessageContent::Command(Command::MotorsOff)),
-                other => {
+                _ => {
                     warn!("Received invalid command '{}' from client", command);
                     None
                 }
