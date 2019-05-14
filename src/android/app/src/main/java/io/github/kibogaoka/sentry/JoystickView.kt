@@ -48,7 +48,7 @@ class JoystickView : View {
     var location = PointF()
         private set
 
-    var deadzone = 0.1F
+    var deadzone = 0.05F
 
     private var _pressed = false
     private var _ringAnimator = ValueAnimator()

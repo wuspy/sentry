@@ -24,7 +24,7 @@
             app:button_color="#ccffffff"
             app:border_width="2dp"
             app:button_diameter="60dp"
-            app:zone_diameter="250dp"/>
+            app:zone_diameter="300dp"/>
 
     <View
             android:id="@+id/reticle"
