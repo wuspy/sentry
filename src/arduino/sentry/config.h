@@ -22,7 +22,7 @@ const int32_t SLIDE_CLOSED_POS      = 0.6 * SLIDE_STEPS_PER_REV;
 const int32_t SLIDE_FIRED_POS       = 0.2 * SLIDE_STEPS_PER_REV;
 const int32_t SLIDE_ACCEL           = 40000;
 const int32_t SLIDE_SPEED           = 2200;
-const uint16_t SLIDE_CURRENT        = 1650;
+const uint16_t SLIDE_CURRENT        = 1600;
 const uint16_t SLIDE_HOLD_CURRENT   = 50;
 const bool SLIDE_STEALTHCHOP        = false;
 const bool SLIDE_INVERTED           = false;
@@ -35,12 +35,12 @@ const int32_t PITCH_MIN_DEGREES     = -72;
 const int32_t PITCH_MAX_STEPS       = PITCH_GEAR_RATIO * PITCH_STEPS_PER_REV * (PITCH_MAX_DEGREES - PITCH_MIN_DEGREES) / 360;
 const int32_t PITCH_HOME_OFFSET     = 0;
 const int32_t PITCH_ACCEL           = 18000;
-const uint16_t PITCH_CURRENT        = 1200;
+const uint16_t PITCH_CURRENT        = 1000;
 const uint16_t PITCH_HOLD_CURRENT   = 50;
 const bool PITCH_STEALTHCHOP        = true;
 const bool PITCH_HOME_INVERTED      = true;
 const bool PITCH_HOME_BIDIRECTIONAL = false;
-const bool PITCH_INVERTED           = true;
+const bool PITCH_INVERTED           = false;
 
 const int32_t YAW_PINION_TEETH      = 8;
 const int32_t YAW_GEAR_TEETH        = 84;
@@ -55,7 +55,7 @@ const uint16_t YAW_HOLD_CURRENT     = 50;
 const bool YAW_STEALTHCHOP          = true;
 const bool YAW_HOME_INVERTED        = true;
 const bool YAW_HOME_BIDIRECTIONAL   = true;
-const bool YAW_INVERTED             = false;
+const bool YAW_INVERTED             = true;
 
 } // namespace Sentry
 
