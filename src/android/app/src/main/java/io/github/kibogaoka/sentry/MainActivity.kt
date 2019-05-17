@@ -103,6 +103,7 @@ class MainActivity : Activity() {
         })
 
         joystick.interval = 50 // ms
+        joystick.responseCurve = JoystickView.ResponseCurve.Exponential(1.4f)
         joystick.setOnUpdateListener {
             tx?.println(String.format(
                 """{"pitch":%.3f,"yaw":%.3f}""",

@@ -7,11 +7,19 @@ import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
+import java.lang.Math.copySign
 import java.util.Timer
 import kotlin.concurrent.scheduleAtFixedRate
 import kotlin.math.*
 
 class JoystickView : View {
+
+    sealed class ResponseCurve {
+        object Linear : ResponseCurve()
+        data class Exponential(
+            val exponent: Float
+        ) : ResponseCurve()
+    }
 
     // Default sizes in DP
     var zoneDiameter = 200f
@@ -48,7 +56,9 @@ class JoystickView : View {
     var location = PointF()
         private set
 
-    var deadzone = 0.05F
+    var deadzone = 0.01F
+
+    var responseCurve: ResponseCurve = ResponseCurve.Linear
 
     private var _pressed = false
     private var _ringAnimator = ValueAnimator()
@@ -176,6 +186,13 @@ class JoystickView : View {
             }
             if (abs(location.y) < deadzone) {
                 location.y = 0f
+            }
+
+            // Apply response profile
+            val rc = responseCurve
+            if (rc is ResponseCurve.Exponential) {
+                location.x = copySign(abs(location.x).pow(rc.exponent), location.x)
+                location.y = copySign(abs(location.y).pow(rc.exponent), location.y)
             }
         } else {
             location.x = 0f
