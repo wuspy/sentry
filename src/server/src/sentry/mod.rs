@@ -1,23 +1,19 @@
-extern crate serde_json;
+extern crate byteorder;
+extern crate bytes;
 extern crate glib;
 extern crate gstreamer;
 extern crate rand;
+extern crate serde_json;
 extern crate tokio;
-extern crate tokio_serial;
 extern crate tokio_fs;
 extern crate tokio_io;
-extern crate bytes;
-extern crate byteorder;
+extern crate tokio_serial;
 
 use std::net::SocketAddr;
-use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 
 #[derive(Clone, Debug)]
 pub enum Command {
-    Move {
-        pitch: f64,
-        yaw: f64,
-    },
+    Move { pitch: f64, yaw: f64 },
     Home,
     Fire,
     ReleaseMagazine,
@@ -52,7 +48,7 @@ pub enum MessageSource {
     Arduino,
     WebsocketServer,
     VideoServer,
-    Client (Client),
+    Client(Client),
 }
 
 #[derive(Clone)]
@@ -74,9 +70,9 @@ pub enum MessageContent {
         message: String,
         for_client: Option<SocketAddr>,
     },
-    Command (Command),
-    ClientConnected (Client),
-    ClientDisconnected (Client),
+    Command(Command),
+    ClientConnected(Client),
+    ClientDisconnected(Client),
     Ping,
 }
 
@@ -86,10 +82,10 @@ pub struct Message {
     pub source: MessageSource,
 }
 
-pub type StartResult<T> = Result<T, String>;
-pub type UnboundedChannel<T> = (UnboundedSender<T>, UnboundedReceiver<T>);
+pub mod bus;
+pub use bus::*;
 
-pub mod server;
 pub mod arduino;
-pub mod video;
 pub mod config;
+pub mod server;
+pub mod video;

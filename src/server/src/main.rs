@@ -4,44 +4,26 @@ extern crate log;
 extern crate serde_derive;
 #[macro_use]
 extern crate futures;
+extern crate gstreamer as gst;
 extern crate simplelog;
 extern crate tokio;
 extern crate toml;
-extern crate gstreamer as gst;
 
 use future::lazy;
+use simplelog::{
+    CombinedLogger, Config as LogConfig, LevelFilter, SharedLogger, TermLogger, WriteLogger,
+};
+use std::env;
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use simplelog::{TermLogger, LevelFilter, Config as LogConfig, CombinedLogger, WriteLogger, SharedLogger};
-use std::env;
 
 mod sentry;
-use sentry::StartResult;
+use crate::sentry::{bus, Message};
+use futures::future::Loop;
 use std::fs::File;
-
-/// Broadcasts one receiver to a list of senders
-macro_rules! broadcast {
-    ($receiver:expr, $senders:expr) => {{
-        let senders: Vec<_> = $senders
-            .into_iter()
-            .map(|sender| sender.clone())
-            .collect();
-
-        tokio::spawn($receiver
-            .map_err(|_| ())
-            .for_each(move |message| {
-                senders.iter().for_each(|sender| {
-                    sender
-                        .unbounded_send(message.clone())
-                        .unwrap_or_else(|err| {
-                            error!("Failed to send message on bus: {}", err);
-                        });
-                });
-                Ok(())
-            })
-        );
-    }}
-}
+use std::ops::Add;
+use std::time::{Duration, Instant};
+use tokio::timer::Delay;
 
 fn main() {
     let mut log_path = env::current_exe().expect("Cannot get executable path");
@@ -50,7 +32,11 @@ fn main() {
     let log_path = log_path.to_str().unwrap();
     let mut loggers = Vec::<Box<SharedLogger>>::new();
     if let Ok(log_file) = File::create(log_path) {
-        loggers.push(WriteLogger::new(LevelFilter::Info, LogConfig::default(), log_file));
+        loggers.push(WriteLogger::new(
+            LevelFilter::Info,
+            LogConfig::default(),
+            log_file,
+        ));
     }
     if let Some(term_logger) = TermLogger::new(LevelFilter::Info, LogConfig::default()) {
         loggers.push(term_logger);
@@ -58,28 +44,62 @@ fn main() {
     CombinedLogger::init(loggers).expect("Cannot initialize logging");
 
     let runtime = Runtime::new().unwrap();
-    tokio::run(lazy(move || {
-        match run(runtime) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                error!("{}", err);
-                Err(())
-            },
-        }
-    }));
+    tokio::run(lazy(move || run(runtime)).map_err(|err| error!("{}", err)));
 }
 
-fn run(runtime: Runtime) -> StartResult<()> {
-    #[allow(deprecated)]
-    let reactor = runtime.reactor();
-    let config = sentry::config::load()?;
-    let (server_tx, server_rx) = sentry::server::start(config.clone())?;
-    let (arduino_tx, arduino_rx) = sentry::arduino::start(config.clone(), reactor)?;
-    let (video_tx, video_rx) = sentry::video::start(config.clone())?;
+fn run(runtime: Runtime) -> impl Future<Item = (), Error = String> {
+    let (bus_sink, bus_stream) = bus::new::<Message>();
 
-    broadcast!(server_rx, vec![&video_tx, &arduino_tx]);
-    broadcast!(arduino_rx, vec![&server_tx, &video_tx]);
-    broadcast!(video_rx, vec![&server_tx, &arduino_tx]);
+    future::result(sentry::config::load()).and_then(move |config| {
+        let video = {
+            let config = config.clone();
+            let bus = (bus_sink.clone(), bus_stream.clone());
+            move || sentry::video::start(config, bus)
+        };
+        let server = {
+            let config = config.clone();
+            let bus = (bus_sink.clone(), bus_stream.clone());
+            move || sentry::server::start(config, bus)
+        };
+        let arduino = {
+            let config = config.clone();
+            let bus = (bus_sink.clone(), bus_stream.clone());
+            #[allow(deprecated)]
+            let reactor = runtime.reactor().clone();
+            move || sentry::arduino::start(config, bus, &reactor)
+        };
 
-    Ok(())
+        tokio::spawn(run_module(format!("Video"), video));
+        tokio::spawn(run_module(format!("Server"), server));
+        tokio::spawn(run_module(format!("Arduino"), arduino));
+
+        bus_stream
+            .map_err(|_| format!("Failed to read from bus"))
+            .for_each(|_| Ok(()))
+    })
+}
+
+fn run_module<T, M>(name: String, module: T) -> impl Future<Item = (), Error = ()>
+where
+    T: FnOnce() -> M + Clone,
+    M: Future<Item = (), Error = String>,
+{
+    future::loop_fn((name, module), move |(name, module)| {
+        info!("Starting module {}", name);
+        module.clone()()
+            .and_then({
+                let name = name.clone();
+                move |_| {
+                    info!("Module {} stopped without error", name);
+                    Ok(Loop::Break(()))
+                }
+            })
+            .or_else(move |err| {
+                error!("Module {} failed with error: {}", name, err);
+                info!("Restarting module {} in 5 seconds...", name);
+                Delay::new(Instant::now().add(Duration::from_secs(5)))
+                    .map_err(|_| ())
+                    .and_then(|_| Ok(Loop::Continue((name, module))))
+            })
+    })
 }

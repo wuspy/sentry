@@ -1,7 +1,6 @@
-use std::fs;
-use std::env;
-use crate::sentry::StartResult;
 use std::collections::HashMap;
+use std::env;
+use std::fs;
 
 #[derive(Clone, Deserialize)]
 pub struct ArduinoConfig {
@@ -34,7 +33,7 @@ pub struct Config {
     pub arduino: ArduinoConfig,
 }
 
-pub fn load() -> StartResult<Config> {
+pub fn load() -> Result<Config, String> {
     let mut path = env::current_exe().map_err(|err| err.to_string())?;
     path.pop();
     path.push("config.toml");
@@ -43,13 +42,20 @@ pub fn load() -> StartResult<Config> {
 
     Ok(toml::from_str::<Config>(
         fs::read_to_string(path)
-            .map_err(|err|
-                format!("Could not read configuration file \"{}\": {}", path, err.to_string())
-            )?
-            .as_str()
-        )
-        .map_err(|err|
-            format!("Could not parse configuration file \"{}\": {}", path, err.to_string())
-        )?
+            .map_err(|err| {
+                format!(
+                    "Could not read configuration file \"{}\": {}",
+                    path,
+                    err.to_string()
+                )
+            })?
+            .as_str(),
     )
+    .map_err(|err| {
+        format!(
+            "Could not parse configuration file \"{}\": {}",
+            path,
+            err.to_string()
+        )
+    })?)
 }

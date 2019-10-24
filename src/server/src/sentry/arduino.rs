@@ -1,16 +1,15 @@
-use std::time::{Duration, SystemTime};
-use std::io;
-use byteorder::{BigEndian, ByteOrder};
-use tokio::codec::{Decoder, Encoder};
-use tokio::reactor::Handle;
-use bytes::{BytesMut, BufMut};
-use tokio_serial::{Serial, SerialPortSettings, Parity, DataBits, StopBits, FlowControl};
-use futures::{Stream, Sink};
-use tokio::prelude::*;
-use crate::sentry::{Command, HardwareStatus, Message, MessageContent, MessageSource, StartResult, UnboundedChannel};
-use futures::sync::mpsc::unbounded;
-use crc::crc16::checksum_usb as crc16;
 use crate::sentry::config::Config;
+use crate::sentry::{Bus, Command, HardwareStatus, Message, MessageContent, MessageSource};
+use byteorder::{BigEndian, ByteOrder};
+use bytes::{BufMut, BytesMut};
+use crc::crc16::checksum_usb as crc16;
+use futures::{Sink, Stream};
+use std::io;
+use std::time::{Duration, SystemTime};
+use tokio::codec::{Decoder, Encoder};
+use tokio::prelude::*;
+use tokio::reactor::Handle;
+use tokio_serial::{DataBits, FlowControl, Parity, Serial, SerialPortSettings, StopBits};
 
 struct ArduinoCodec {
     config: Config,
@@ -18,9 +17,7 @@ struct ArduinoCodec {
 
 impl ArduinoCodec {
     pub fn new(config: Config) -> Self {
-        ArduinoCodec {
-            config,
-        }
+        ArduinoCodec { config }
     }
 }
 
@@ -67,20 +64,26 @@ impl Encoder for ArduinoCodec {
         dst.reserve(11);
         let mut message: [u8; 11] = [0; 11];
         message[2] = match item {
-            Command::Move {..}              => 200,
-            Command::Home                   => 201,
-            Command::ReleaseMagazine        => 202,
-            Command::LoadMagazine           => 203,
-            Command::Reload                 => 204,
-            Command::Fire                   => 205,
-            Command::FireAndReload          => 206,
-            Command::MotorsOn               => 207,
-            Command::MotorsOff              => 208,
+            Command::Move { .. } => 200,
+            Command::Home => 201,
+            Command::ReleaseMagazine => 202,
+            Command::LoadMagazine => 203,
+            Command::Reload => 204,
+            Command::Fire => 205,
+            Command::FireAndReload => 206,
+            Command::MotorsOn => 207,
+            Command::MotorsOff => 208,
         };
         match item {
             Command::Move { pitch, yaw } => {
-                BigEndian::write_i32(&mut message[3..], (pitch * self.config.arduino.pitch_max_speed as f64) as i32);
-                BigEndian::write_i32(&mut message[7..], (yaw * self.config.arduino.yaw_max_speed as f64) as i32);
+                BigEndian::write_i32(
+                    &mut message[3..],
+                    (pitch * self.config.arduino.pitch_max_speed as f64) as i32,
+                );
+                BigEndian::write_i32(
+                    &mut message[7..],
+                    (yaw * self.config.arduino.yaw_max_speed as f64) as i32,
+                );
             }
             Command::Home => {
                 BigEndian::write_u32(&mut message[3..], self.config.arduino.pitch_homing_speed);
@@ -95,7 +98,11 @@ impl Encoder for ArduinoCodec {
     }
 }
 
-pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Message>> {
+pub fn start(
+    config: Config,
+    bus: Bus<Message>,
+    handle: &Handle,
+) -> impl Future<Item = (), Error = String> {
     let serial_settings = SerialPortSettings {
         baud_rate: config.arduino.baud,
         parity: Parity::None,
@@ -105,31 +112,44 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
         timeout: Duration::from_millis(10),
     };
 
-    let arduino = Serial::from_path_with_handle(&config.arduino.device, &serial_settings, handle)
-        .map_err(|err| format!("Cannot open {}: {}", &config.arduino.device, err))?;
+    future::result(Serial::from_path_with_handle(
+        &config.arduino.device,
+        &serial_settings,
+        handle,
+    ))
+    .map_err({
+        let config = config.clone();
+        move |err| format!("Cannot open {}: {}", config.arduino.device, err)
+    })
+    .and_then(move |arduino| handle_arduino(config, arduino, bus))
+}
 
+fn handle_arduino(
+    config: Config,
+    arduino: Serial,
+    bus: Bus<Message>,
+) -> impl Future<Item = (), Error = String> {
+    let (bus_sink, bus_stream) = bus;
     let (arduino_sink, arduino_stream) = ArduinoCodec::new(config.clone()).framed(arduino).split();
-    let (in_message_sink, in_message_stream) = unbounded::<Message>();
-    let (out_message_sink, out_message_stream) = unbounded::<Message>();
-
-    // Spawn a task to forward arduino messages to the server through an unbounded channel
-    tokio::spawn(arduino_stream
-        .map_err(|_| ())
-        .map(|message| {
-            Message {
-                content: message,
-                source: MessageSource::Arduino,
-            }
-        })
-        .forward(out_message_sink.sink_map_err(|_| ()))
-        .and_then(|_| Ok(()))
-    );
-
-    // Spawn a task to forward server messages to the arduino
     let mut message_count = 0;
     let mut last_calculation_time = SystemTime::now();
-    tokio::spawn(in_message_stream
-        .map_err(|_| ())
+
+    // Spawn a task to forward arduino messages to the server through an unbounded channel
+    let arduino_future = arduino_stream
+        .map_err(|err| format!("Failed to read from arduino: {}", err))
+        .map(|message| Message {
+            content: message,
+            source: MessageSource::Arduino,
+        })
+        .forward(
+            bus_sink
+                .clone()
+                .sink_map_err(|err| format!("Failed to forward arduino messages to bus: {}", err)),
+        )
+        .map(|_| ());
+
+    let bus_future = bus_stream
+        .map_err(|_| format!("Failed to read from bus"))
         .filter_map(move |message| {
             match &message.source {
                 // Ignore messages from clients that aren't first in the queue
@@ -138,7 +158,7 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
                     // Match Command messages only
                     MessageContent::Command(command) => Some(command),
                     _ => None,
-                }
+                },
             }
         })
         .filter(move |_| {
@@ -159,9 +179,14 @@ pub fn start(config: Config, handle: &Handle) -> StartResult<UnboundedChannel<Me
             }
             true
         })
-        .forward(arduino_sink.sink_map_err(|_| ()))
-        .and_then(|_| Ok(()))
-    );
+        // Forward server messages to the arduino
+        .forward(
+            arduino_sink.sink_map_err(|err| format!("Failed to send message to arduino: {}", err)),
+        )
+        .map(|_| ());
 
-    Ok((in_message_sink, out_message_stream))
+    arduino_future
+        .select(bus_future)
+        .map_err(|(err, _)| err)
+        .map(|_| ())
 }
